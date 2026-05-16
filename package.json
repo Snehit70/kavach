@@ -1,0 +1,24 @@
+{
+  "name": "pkgstate",
+  "version": "0.1.0",
+  "description": "Laptop package state manager — TUI for inventorying every package across every package manager.",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "pkgstate": "./src/cli.ts"
+  },
+  "scripts": {
+    "start": "bun run src/cli.ts",
+    "scan": "bun run src/cli.ts scan",
+    "scan:json": "bun run src/cli.ts scan --json"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@opentui/core": "^0.2.6"
+  }
+}
