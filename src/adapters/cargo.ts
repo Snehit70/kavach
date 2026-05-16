@@ -1,5 +1,5 @@
-import type { Adapter, Package } from "../types";
 import { memoize } from "../cache";
+import type { Adapter, Package } from "../types";
 import { cmpVersions, has, run } from "../util";
 
 /**

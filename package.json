@@ -13,9 +13,13 @@
     "scan:json": "bun run src/cli.ts scan --json",
     "test": "bun test",
     "typecheck": "bunx tsc --noEmit",
-    "check": "bun run typecheck && bun test"
+    "lint": "bunx biome check src/ test/",
+    "lint:fix": "bunx biome check --write src/ test/",
+    "format": "bunx biome format --write src/ test/",
+    "check": "bun run typecheck && bun run lint && bun test"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.4.15",
     "@types/bun": "latest"
   },
   "peerDependencies": {

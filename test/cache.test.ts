@@ -1,5 +1,5 @@
-import { test, expect, describe, beforeEach, beforeAll } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -53,14 +53,15 @@ describe("cache", () => {
   });
 
   test("memoizeJson round-trips arbitrary JSON", async () => {
-    const value = { a: 1, b: ["x", "y"], c: { nested: true } };
-    const out1 = await memoizeJson("j", async () => value);
+    type V = { a: number; b: string[]; c: { nested: boolean } };
+    const value: V = { a: 1, b: ["x", "y"], c: { nested: true } };
+    const out1 = await memoizeJson<V>("j", async () => value);
     expect(out1).toEqual(value);
 
     let called = false;
-    const out2 = await memoizeJson("j", async () => {
+    const out2 = await memoizeJson<V>("j", async () => {
       called = true;
-      return { different: true };
+      return { a: 999, b: [], c: { nested: false } };
     });
     expect(out2).toEqual(value);
     expect(called).toBe(false);

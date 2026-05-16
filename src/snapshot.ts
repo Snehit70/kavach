@@ -1,6 +1,6 @@
-import { join } from "node:path";
 import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
+import { join } from "node:path";
 import type { ScanResult } from "./scanner";
 
 const cacheDir = process.env.XDG_CACHE_HOME
@@ -16,9 +16,7 @@ interface SnapshotFile {
   result: ScanResult;
 }
 
-export async function loadSnapshot(): Promise<
-  { result: ScanResult; ageMs: number } | null
-> {
+export async function loadSnapshot(): Promise<{ result: ScanResult; ageMs: number } | null> {
   try {
     const file = Bun.file(snapshotPath);
     if (!(await file.exists())) return null;

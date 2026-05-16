@@ -1,5 +1,5 @@
-import { test, expect, describe } from "bun:test";
-import { cyclesSortKey, sortPackages, SORT_KEYS, type SortKey } from "../src/sort";
+import { describe, expect, test } from "bun:test";
+import { cyclesSortKey, SORT_KEYS, type SortKey, sortPackages } from "../src/sort";
 import type { Package } from "../src/types";
 
 const wrap = (pkgs: Package[]) => pkgs.map((p) => ({ pkg: p }));

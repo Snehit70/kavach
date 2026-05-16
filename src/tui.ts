@@ -1,18 +1,18 @@
 import {
-  createCliRenderer,
   BoxRenderable,
-  TextRenderable,
-  TextTableRenderable,
+  createCliRenderer,
   InputRenderable,
   InputRenderableEvents,
   RGBA,
   type TextChunk,
+  TextRenderable,
+  TextTableRenderable,
 } from "@opentui/core";
-import { scan, type ScanResult } from "./scanner";
+import { applyFilter, type FilterHit, type ParsedFilter, parseFilter } from "./filter";
+import { type ScanResult, scan } from "./scanner";
 import { loadSnapshot } from "./snapshot";
+import { cyclesSortKey, type SortDir, type SortKey, sortPackages } from "./sort";
 import type { Package, Status } from "./types";
-import { applyFilter, parseFilter, type FilterHit, type ParsedFilter } from "./filter";
-import { cyclesSortKey, sortPackages, type SortDir, type SortKey } from "./sort";
 
 const COLORS = {
   bg: "#0e1015",
@@ -174,7 +174,7 @@ export async function runTui(opts: { refresh?: boolean } = {}) {
   });
   const filterInput = new InputRenderable(renderer, {
     id: "filterInput",
-    placeholder: "/ to focus  ·  fuzzy: \"pip rich\"  ·  :outdated  :m=npm  :s=unknown",
+    placeholder: '/ to focus  ·  fuzzy: "pip rich"  ·  :outdated  :m=npm  :s=unknown',
     value: "",
   });
   filterBox.add(filterInput);
@@ -239,9 +239,8 @@ export async function runTui(opts: { refresh?: boolean } = {}) {
     if (cachedHits) return cachedHits;
     const hits = applyFilter(state.filter, state.packages);
     // Re-sort unless we're already ranking by fuzzy score
-    const final = state.filter.tokens.length > 0
-      ? hits
-      : sortPackages(hits, state.sortKey, state.sortDir);
+    const final =
+      state.filter.tokens.length > 0 ? hits : sortPackages(hits, state.sortKey, state.sortDir);
     cachedHits = final;
     return final;
   };
@@ -256,11 +255,15 @@ export async function runTui(opts: { refresh?: boolean } = {}) {
     }
     const total = state.packages.length;
     const outdated = state.packages.filter((p) => p.status === "outdated").length;
-    const sortInfo = state.filter.tokens.length > 0
-      ? "sort: fuzzy-rank"
-      : `sort: ${state.sortKey} ${state.sortDir === "asc" ? "↑" : "↓"}`;
+    const sortInfo =
+      state.filter.tokens.length > 0
+        ? "sort: fuzzy-rank"
+        : `sort: ${state.sortKey} ${state.sortDir === "asc" ? "↑" : "↓"}`;
     const prefix = state.scanning ? `⟳ ${state.scanMessage}   ·   ` : "";
-    const suffix = state.scanResult && !state.scanning ? `   (${state.scanResult.totalMs}ms, ${sortInfo})` : `   (${sortInfo})`;
+    const suffix =
+      state.scanResult && !state.scanning
+        ? `   (${state.scanResult.totalMs}ms, ${sortInfo})`
+        : `   (${sortInfo})`;
     headerText.content = `${prefix}${total} packages   ${outdated} outdated${suffix}`;
   };
 
@@ -286,10 +289,10 @@ export async function runTui(opts: { refresh?: boolean } = {}) {
       state.filter.tokens.length > 0
         ? ""
         : state.sortKey === k
-        ? state.sortDir === "asc"
-          ? " ↑"
-          : " ↓"
-        : "";
+          ? state.sortDir === "asc"
+            ? " ↑"
+            : " ↓"
+          : "";
 
     const headerRow: TextChunk[][] = [
       [chunk("STATUS" + sortMark("status"), COLORS.dim)],
@@ -337,7 +340,8 @@ export async function runTui(opts: { refresh?: boolean } = {}) {
     overlay.visible = true;
     overlay.title = ` ${state.confirm.title} `;
     const lines = state.confirm.cmds.slice(0, 5).map((c, i) => `  ${i + 1}. ${c.label}`);
-    const more = state.confirm.cmds.length > 5 ? `  … and ${state.confirm.cmds.length - 5} more` : "";
+    const more =
+      state.confirm.cmds.length > 5 ? `  … and ${state.confirm.cmds.length - 5} more` : "";
     overlayText.content =
       `Run ${state.confirm.cmds.length} command(s)?\n\n` +
       `${lines.join("\n")}${more ? "\n" + more : ""}\n\n` +
@@ -388,7 +392,9 @@ export async function runTui(opts: { refresh?: boolean } = {}) {
           completed.add(e.manager);
           if (e.packages) {
             // Replace this manager's packages in-place so the table updates live.
-            state.packages = state.packages.filter((p) => p.manager !== e.manager).concat(e.packages);
+            state.packages = state.packages
+              .filter((p) => p.manager !== e.manager)
+              .concat(e.packages);
             invalidate();
           }
         } else if (e.phase === "error") {

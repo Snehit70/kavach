@@ -1,4 +1,4 @@
-import { test, expect, describe } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { applyFilter, parseFilter } from "../src/filter";
 import type { Package } from "../src/types";
 

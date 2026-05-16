@@ -47,11 +47,11 @@ export async function scan(
       opts.onProgress?.({ manager: a.name, phase: "start" });
       const start = performance.now();
       try {
-        const pkgs = await memoizeJson<Package[]>(
-          `adapter:${a.name}`,
-          () => a.scan({ refresh }),
-          { refresh, freshMs: ADAPTER_FRESH_MS, staleMs: ADAPTER_STALE_MS },
-        );
+        const pkgs = await memoizeJson<Package[]>(`adapter:${a.name}`, () => a.scan({ refresh }), {
+          refresh,
+          freshMs: ADAPTER_FRESH_MS,
+          staleMs: ADAPTER_STALE_MS,
+        });
         const outdated = pkgs.filter((p) => p.status === "outdated").length;
         perManager[a.name] = {
           count: pkgs.length,

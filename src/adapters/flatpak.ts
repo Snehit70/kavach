@@ -7,10 +7,9 @@ export const flatpak: Adapter = {
     return has("flatpak");
   },
   async scan() {
-    const list = await run(
-      ["flatpak", "list", "--app", "--columns=application,version,branch"],
-      { timeoutMs: 15_000 },
-    );
+    const list = await run(["flatpak", "list", "--app", "--columns=application,version,branch"], {
+      timeoutMs: 15_000,
+    });
     const items = list.stdout
       .split("\n")
       .map((l) => l.trim())

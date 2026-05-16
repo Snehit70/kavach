@@ -1,8 +1,8 @@
-import type { Adapter, Package } from "../types";
-import { memoize } from "../cache";
-import { cmpVersions, has, run } from "../util";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
+import { memoize } from "../cache";
+import type { Adapter, Package } from "../types";
+import { cmpVersions, has, run } from "../util";
 
 /**
  * go adapter — discovers binaries in $GOBIN (or $GOPATH/bin) and reads their

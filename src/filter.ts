@@ -1,5 +1,5 @@
+import { type FuzzyMatch, fuzzyMatchAll } from "./fuzzy";
 import type { Package, Status } from "./types";
-import { fuzzyMatchAll, type FuzzyMatch } from "./fuzzy";
 
 /**
  * A parsed user filter expression.

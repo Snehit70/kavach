@@ -13,10 +13,9 @@ export const dnf: Adapter = {
     return (await has("dnf")) && (await has("rpm"));
   },
   async scan() {
-    const installed = await run(
-      ["rpm", "-qa", "--qf", "%{NAME}\t%{VERSION}-%{RELEASE}\n"],
-      { timeoutMs: 30_000 },
-    );
+    const installed = await run(["rpm", "-qa", "--qf", "%{NAME}\t%{VERSION}-%{RELEASE}\n"], {
+      timeoutMs: 30_000,
+    });
     const map = new Map<string, string>();
     for (const line of installed.stdout.split("\n")) {
       if (!line) continue;
