@@ -53,9 +53,15 @@ export function parseFilter(input: string): ParsedFilter {
       value = body.slice(eq + 1);
     } else {
       key = body;
-      value = parts[i + 1];
-      if (value !== undefined) i++; // consume next token as the value
     }
+
+    const isKnownKey = key === "m" || key === "manager" || key === "s" || key === "status";
+    // Only consume the next token as the value for KNOWN keys without an `=`.
+    if (isKnownKey && value === undefined) {
+      value = parts[i + 1];
+      if (value !== undefined) i++;
+    }
+
     switch (key) {
       case "m":
       case "manager":

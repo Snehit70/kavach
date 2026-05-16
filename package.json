@@ -10,7 +10,10 @@
   "scripts": {
     "start": "bun run src/cli.ts",
     "scan": "bun run src/cli.ts scan",
-    "scan:json": "bun run src/cli.ts scan --json"
+    "scan:json": "bun run src/cli.ts scan --json",
+    "test": "bun test",
+    "typecheck": "bunx tsc --noEmit",
+    "check": "bun run typecheck && bun test"
   },
   "devDependencies": {
     "@types/bun": "latest"
