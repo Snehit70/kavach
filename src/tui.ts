@@ -216,6 +216,29 @@ export async function runTui(opts: { refresh?: boolean } = {}) {
   tableBox.add(table);
   root.add(tableBox);
 
+  tableBox.onMouseScroll = (event) => {
+    const dir = event.scroll?.direction;
+    const delta = event.scroll?.delta ?? 1;
+    if (dir === "down") {
+      state.selected = Math.min(visibleHits().length - 1, state.selected + delta);
+      rerender();
+    } else if (dir === "up") {
+      state.selected = Math.max(0, state.selected - delta);
+      rerender();
+    }
+  };
+  tableBox.onMouseDown = (event) => {
+    // Approximate row hit: y relative to the table box, minus border (1) and
+    // header row (1). Each row is one terminal line tall.
+    const rel = event.y - (tableBox.y ?? 0) - 2;
+    if (rel < 0) return;
+    const hits = visibleHits();
+    if (rel < hits.length) {
+      state.selected = rel;
+      rerender();
+    }
+  };
+
   const detailBox = new BoxRenderable(renderer, {
     id: "detailBox",
     height: 9,
