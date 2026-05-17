@@ -38,7 +38,12 @@ export function makePool(max: number) {
   };
 }
 
-const httpPool = makePool(HTTP_CONCURRENCY);
+let httpPool = makePool(HTTP_CONCURRENCY);
+
+/** Reconfigure the global HTTP pool (called by config loader). */
+export function setHttpConcurrency(n: number): void {
+  if (n > 0) httpPool = makePool(n);
+}
 
 /** Pool-limited fetch with a default User-Agent and timeout. */
 export async function httpFetch(url: string, init: RequestInit = {}): Promise<Response> {

@@ -1,5 +1,7 @@
 import { allAdapters } from "./adapters";
 import { flush, memoizeJson, settle } from "./cache";
+import { loadConfig } from "./config";
+import { setHttpConcurrency } from "./http";
 import { loadPlugins } from "./plugins";
 import { saveSnapshot } from "./snapshot";
 import type { Package } from "./types";
@@ -40,13 +42,19 @@ export async function scan(
   const checkUpdates = opts.checkUpdates ?? true;
   const t0 = performance.now();
 
+  const config = await loadConfig();
+  if (config.httpConcurrency) setHttpConcurrency(config.httpConcurrency);
   const plugins = await loadPlugins((file, err) => {
     process.stderr.write(`pkgstate: plugin failed (${file}): ${err}\n`);
   });
   const seen = new Set(allAdapters.map((a) => a.name));
   const merged = [...allAdapters, ...plugins.filter((p) => !seen.has(p.name))];
-  const available = await Promise.all(merged.map(async (a) => ((await a.available()) ? a : null)));
+  const disabled = new Set(config.disabled);
+  const enabled = merged.filter((a) => !disabled.has(a.name));
+  const available = await Promise.all(enabled.map(async (a) => ((await a.available()) ? a : null)));
   const adapters = available.filter((a): a is NonNullable<typeof a> => a !== null);
+  const freshMs = config.adapterFreshMs ?? ADAPTER_FRESH_MS;
+  const staleMs = config.adapterStaleMs ?? ADAPTER_STALE_MS;
 
   const perManager: ScanResult["perManager"] = {};
   const out: Package[] = [];
@@ -60,11 +68,7 @@ export async function scan(
         const pkgs = await memoizeJson<Package[]>(
           cacheKey,
           () => a.scan({ refresh, checkUpdates }),
-          {
-            refresh,
-            freshMs: ADAPTER_FRESH_MS,
-            staleMs: ADAPTER_STALE_MS,
-          },
+          { refresh, freshMs, staleMs },
         );
         const outdated = pkgs.filter((p) => p.status === "outdated").length;
         perManager[a.name] = {
