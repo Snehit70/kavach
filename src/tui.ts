@@ -11,6 +11,7 @@ import {
 } from "@opentui/core";
 import { batchUpdates } from "./batch";
 import { applyFilter, type FilterHit, type ParsedFilter, parseFilter } from "./filter";
+import { appendHistory } from "./history";
 import { type ScanResult, scan } from "./scanner";
 import { loadSnapshot } from "./snapshot";
 import { cyclesSortKey, type SortDir, type SortKey, sortPackages } from "./sort";
@@ -570,6 +571,9 @@ export async function runTui(opts: { refresh?: boolean } = {}) {
   filterInput.on(InputRenderableEvents.ENTER, () => {
     state.filterFocused = false;
     filterInput.blur();
+    if (state.rawFilter.trim()) {
+      appendHistory(state.rawFilter).catch(() => {});
+    }
     rerender();
   });
 
