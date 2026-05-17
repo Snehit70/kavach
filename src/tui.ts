@@ -472,6 +472,28 @@ export async function runTui(opts: { refresh?: boolean } = {}) {
     }, ms);
   };
 
+  /** Every N ms after a successful scan, kick off a silent background scan
+   *  with refresh:true so the next 'r' or auto-update returns instantly from
+   *  cache. We hand-roll a single-flight guard so reentrancy is impossible. */
+  const PREWARM_INTERVAL_MS = 10 * 60 * 1000;
+  let prewarmTimer: ReturnType<typeof setTimeout> | null = null;
+  let prewarmInFlight = false;
+  const schedulePrewarm = () => {
+    if (prewarmTimer) clearTimeout(prewarmTimer);
+    prewarmTimer = setTimeout(async () => {
+      if (prewarmInFlight) return;
+      prewarmInFlight = true;
+      try {
+        await scan({ refresh: true, checkUpdates: true });
+      } catch {
+        // swallow: prewarm failures shouldn't surface as flash spam
+      } finally {
+        prewarmInFlight = false;
+        schedulePrewarm();
+      }
+    }, PREWARM_INTERVAL_MS);
+  };
+
   const doScan = async (refresh = false) => {
     state.scanning = true;
     const inFlight = new Set<string>();
@@ -513,6 +535,7 @@ export async function runTui(opts: { refresh?: boolean } = {}) {
     state.scanning = false;
     invalidate();
     rerender();
+    schedulePrewarm();
   };
 
   const runCommands = async (cmds: { cmd: string[]; label: string }[]) => {
