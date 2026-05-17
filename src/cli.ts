@@ -1,6 +1,8 @@
 #!/usr/bin/env bun
 import { stats as cacheStats, clear as clearCache, prune as pruneCache } from "./cache";
+import { diffScans } from "./diff";
 import { scan } from "./scanner";
+import { listArchives } from "./snapshot";
 import { runTui } from "./tui";
 
 function formatBytes(n: number): string {
@@ -102,6 +104,35 @@ async function main() {
     process.exit(2);
   }
 
+  if (cmd === "diff") {
+    const archives = await listArchives();
+    if (archives.length < 2) {
+      process.stderr.write(
+        `need at least 2 snapshots to diff (have ${archives.length}). Run 'pkgstate scan' or use the TUI to produce more.\n`,
+      );
+      process.exit(1);
+    }
+    const prev = archives[archives.length - 2]!;
+    const next = archives[archives.length - 1]!;
+    const d = diffScans(prev.result, next.result);
+    process.stdout.write(
+      `diff ${prev.file}  →  ${next.file}\n` +
+        `  ${d.added.length} added   ${d.removed.length} removed   ${d.changed.length} changed\n\n`,
+    );
+    for (const p of d.added) {
+      process.stdout.write(`+ ${p.manager.padEnd(10)} ${p.name}  ${p.installed}\n`);
+    }
+    for (const p of d.removed) {
+      process.stdout.write(`- ${p.manager.padEnd(10)} ${p.name}  ${p.installed}\n`);
+    }
+    for (const c of d.changed) {
+      process.stdout.write(
+        `~ ${c.to.manager.padEnd(10)} ${c.to.name}  ${c.from.installed} → ${c.to.installed}  [${c.from.status} → ${c.to.status}]\n`,
+      );
+    }
+    return;
+  }
+
   if (cmd === "help" || cmd === "--help" || cmd === "-h") {
     printHelp();
     return;
@@ -125,6 +156,7 @@ Usage:
   pkgstate cache show     Show cache path, size, and entry stats
   pkgstate cache clear    Empty the on-disk cache
   pkgstate cache prune    Remove dead (past-stale) entries
+  pkgstate diff           Diff the two most recent snapshots
   pkgstate help           Show this message
 `);
 }
