@@ -1,9 +1,10 @@
 #!/usr/bin/env bun
-import { stats as cacheStats, clear as clearCache, prune as pruneCache } from "./cache";
+import { stats as cacheStats, clear as clearCache, flush, prune as pruneCache } from "./cache";
 import { diffScans } from "./diff";
 import { scan } from "./scanner";
 import { listArchives } from "./snapshot";
 import { runTui } from "./tui";
+import { queryAll } from "./vuln";
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -104,6 +105,28 @@ async function main() {
     process.exit(2);
   }
 
+  if (cmd === "vulns") {
+    const result = await scan({ awaitBackground: true });
+    process.stderr.write(`Querying OSV.dev for ${result.packages.length} packages…\n`);
+    const map = await queryAll(result.packages);
+    await flush();
+    if (map.size === 0) {
+      process.stdout.write("No known vulnerabilities in installed packages.\n");
+      return;
+    }
+    for (const p of result.packages) {
+      const k = `${p.manager}\x00${p.name}\x00${p.installed}`;
+      const v = map.get(k);
+      if (!v) continue;
+      process.stdout.write(`${p.manager}/${p.name}@${p.installed}\n`);
+      for (const e of v) {
+        process.stdout.write(`  ${e.id}${e.severity ? `  [${e.severity}]` : ""}\n`);
+        if (e.summary) process.stdout.write(`    ${e.summary}\n`);
+      }
+    }
+    return;
+  }
+
   if (cmd === "diff") {
     const archives = await listArchives();
     if (archives.length < 2) {
@@ -157,6 +180,7 @@ Usage:
   pkgstate cache clear    Empty the on-disk cache
   pkgstate cache prune    Remove dead (past-stale) entries
   pkgstate diff           Diff the two most recent snapshots
+  pkgstate vulns          Cross-reference installed packages against OSV.dev
   pkgstate help           Show this message
 `);
 }
