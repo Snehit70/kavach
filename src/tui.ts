@@ -481,6 +481,7 @@ export async function runTui(opts: { refresh?: boolean } = {}) {
     rerender();
     const result = await scan({
       refresh,
+      checkUpdates: true,
       onProgress: (e) => {
         if (e.phase === "start") {
           inFlight.add(e.manager);

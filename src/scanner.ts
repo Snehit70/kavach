@@ -29,9 +29,14 @@ export async function scan(
     /** Block until SWR background refreshes finish. Set true in CLI (process exits)
      *  and false in long-lived TUI (refreshes can finish at their own pace). */
     awaitBackground?: boolean;
+    /** Hit network/repo metadata for "latest" lookups. When false, adapters that
+     *  rely on slow remote calls (e.g. `dnf check-update`) report installed-only
+     *  with status "unknown". */
+    checkUpdates?: boolean;
   } = {},
 ): Promise<ScanResult> {
   const refresh = !!opts.refresh;
+  const checkUpdates = opts.checkUpdates ?? true;
   const t0 = performance.now();
 
   const available = await Promise.all(
@@ -47,11 +52,16 @@ export async function scan(
       opts.onProgress?.({ manager: a.name, phase: "start" });
       const start = performance.now();
       try {
-        const pkgs = await memoizeJson<Package[]>(`adapter:${a.name}`, () => a.scan({ refresh }), {
-          refresh,
-          freshMs: ADAPTER_FRESH_MS,
-          staleMs: ADAPTER_STALE_MS,
-        });
+        const cacheKey = `adapter:${a.name}${checkUpdates ? "" : ":no-check"}`;
+        const pkgs = await memoizeJson<Package[]>(
+          cacheKey,
+          () => a.scan({ refresh, checkUpdates }),
+          {
+            refresh,
+            freshMs: ADAPTER_FRESH_MS,
+            staleMs: ADAPTER_STALE_MS,
+          },
+        );
         const outdated = pkgs.filter((p) => p.status === "outdated").length;
         perManager[a.name] = {
           count: pkgs.length,

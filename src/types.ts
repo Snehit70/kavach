@@ -13,5 +13,5 @@ export interface Package {
 export interface Adapter {
   name: string;
   available(): Promise<boolean>;
-  scan(opts: { refresh: boolean }): Promise<Package[]>;
+  scan(opts: { refresh: boolean; checkUpdates: boolean }): Promise<Package[]>;
 }

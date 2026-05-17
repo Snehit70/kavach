@@ -12,7 +12,7 @@ export const dnf: Adapter = {
   async available() {
     return (await has("dnf")) && (await has("rpm"));
   },
-  async scan() {
+  async scan({ checkUpdates }) {
     const installed = await run(["rpm", "-qa", "--qf", "%{NAME}\t%{VERSION}-%{RELEASE}\n"], {
       timeoutMs: 30_000,
     });
@@ -23,29 +23,41 @@ export const dnf: Adapter = {
       if (name && version) map.set(name, version);
     }
 
-    // `dnf check-update` is slow but authoritative. Without it we can't know
-    // what's "latest" without hitting metadata, which is the whole point.
-    const upd = await run(["dnf", "-q", "check-update"], { timeoutMs: 120_000 });
-    // exit code 100 => updates available; 0 => no updates; otherwise error.
+    // `dnf check-update` is slow (refreshes repo metadata) but authoritative.
+    // Skipped when checkUpdates=false; all rows become status "unknown".
     const outdated = new Map<string, string>();
-    if (upd.exitCode === 0 || upd.exitCode === 100) {
-      for (const raw of upd.stdout.split("\n")) {
-        const line = raw.trim();
-        if (!line || line.startsWith("Obsoleting")) continue;
-        // Columns: name.arch  version  repo
-        const cols = line.split(/\s+/);
-        if (cols.length < 3) continue;
-        const nameArch = cols[0]!;
-        const version = cols[1]!;
-        const dot = nameArch.lastIndexOf(".");
-        const name = dot > 0 ? nameArch.slice(0, dot) : nameArch;
-        outdated.set(name, version);
+    if (checkUpdates) {
+      const upd = await run(["dnf", "-q", "check-update"], { timeoutMs: 120_000 });
+      // exit code 100 => updates available; 0 => no updates; otherwise error.
+      if (upd.exitCode === 0 || upd.exitCode === 100) {
+        for (const raw of upd.stdout.split("\n")) {
+          const line = raw.trim();
+          if (!line || line.startsWith("Obsoleting")) continue;
+          // Columns: name.arch  version  repo
+          const cols = line.split(/\s+/);
+          if (cols.length < 3) continue;
+          const nameArch = cols[0]!;
+          const version = cols[1]!;
+          const dot = nameArch.lastIndexOf(".");
+          const name = dot > 0 ? nameArch.slice(0, dot) : nameArch;
+          outdated.set(name, version);
+        }
       }
     }
 
     const out: Package[] = [];
     for (const [name, installedVer] of map) {
       const latest = outdated.get(name);
+      if (!checkUpdates) {
+        out.push({
+          manager: "dnf",
+          name,
+          installed: installedVer,
+          status: "unknown",
+          updateCmd: ["sudo", "dnf", "upgrade", "-y", name],
+        });
+        continue;
+      }
       out.push({
         manager: "dnf",
         name,

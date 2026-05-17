@@ -32,8 +32,10 @@ async function main() {
   if (cmd === "scan") {
     const json = args.includes("--json");
     const refresh = args.includes("--refresh");
+    const checkUpdates = args.includes("--check-updates");
     const result = await scan({
       refresh,
+      checkUpdates,
       awaitBackground: true,
       onProgress: json
         ? undefined
@@ -119,6 +121,7 @@ Usage:
   pkgstate scan           Scan and print a summary
   pkgstate scan --json    Scan and emit machine-readable JSON
   pkgstate scan --refresh Bypass the latest-version cache
+  pkgstate scan --check-updates  Hit repo/network metadata (slower; needed for dnf "outdated")
   pkgstate cache show     Show cache path, size, and entry stats
   pkgstate cache clear    Empty the on-disk cache
   pkgstate cache prune    Remove dead (past-stale) entries
