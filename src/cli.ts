@@ -1,6 +1,24 @@
 #!/usr/bin/env bun
+import { stats as cacheStats, clear as clearCache, prune as pruneCache } from "./cache";
 import { scan } from "./scanner";
 import { runTui } from "./tui";
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(2)} MB`;
+}
+
+function formatMs(ms: number | null): string {
+  if (ms === null) return "—";
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h`;
+  return `${Math.round(h / 24)}d`;
+}
 
 const args = process.argv.slice(2);
 const cmd = args[0];
@@ -54,6 +72,34 @@ async function main() {
     return;
   }
 
+  if (cmd === "cache") {
+    const sub = args[1] ?? "show";
+    if (sub === "show" || sub === "stats") {
+      const s = await cacheStats();
+      process.stdout.write(
+        `path:     ${s.path}\n` +
+          `size:     ${formatBytes(s.fileSize)}\n` +
+          `entries:  ${s.total} total  (${s.fresh} fresh, ${s.stale} stale, ${s.dead} dead)\n` +
+          `oldest:   ${formatMs(s.oldestAgeMs)}\n` +
+          `newest:   ${formatMs(s.newestAgeMs)}\n`,
+      );
+      return;
+    }
+    if (sub === "clear") {
+      await clearCache();
+      process.stdout.write("cache cleared\n");
+      return;
+    }
+    if (sub === "prune") {
+      const removed = await pruneCache();
+      process.stdout.write(`removed ${removed} dead entr${removed === 1 ? "y" : "ies"}\n`);
+      return;
+    }
+    process.stderr.write(`unknown cache subcommand: ${sub}\n`);
+    process.stderr.write("usage: pkgstate cache [show|clear|prune]\n");
+    process.exit(2);
+  }
+
   if (cmd === "help" || cmd === "--help" || cmd === "-h") {
     printHelp();
     return;
@@ -73,6 +119,9 @@ Usage:
   pkgstate scan           Scan and print a summary
   pkgstate scan --json    Scan and emit machine-readable JSON
   pkgstate scan --refresh Bypass the latest-version cache
+  pkgstate cache show     Show cache path, size, and entry stats
+  pkgstate cache clear    Empty the on-disk cache
+  pkgstate cache prune    Remove dead (past-stale) entries
   pkgstate help           Show this message
 `);
 }

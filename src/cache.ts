@@ -206,6 +206,66 @@ export async function memoizeJson<T>(
   return JSON.parse(s) as T;
 }
 
+export interface CacheStats {
+  path: string;
+  fileSize: number;
+  total: number;
+  fresh: number;
+  stale: number;
+  dead: number;
+  oldestAgeMs: number | null;
+  newestAgeMs: number | null;
+}
+
+export async function stats(): Promise<CacheStats> {
+  const data = await load();
+  let fresh = 0;
+  let stale = 0;
+  let dead = 0;
+  let oldest: number | null = null;
+  let newest: number | null = null;
+  const now = Date.now();
+  for (const e of Object.values(data.entries)) {
+    const age = now - e.ts;
+    if (oldest === null || age > oldest) oldest = age;
+    if (newest === null || age < newest) newest = age;
+    const f = e.freshMs ?? FRESH_MS;
+    if (age < f) fresh++;
+    else if (age < STALE_MS) stale++;
+    else dead++;
+  }
+  const file = Bun.file(cachePath);
+  const fileSize = (await file.exists()) ? file.size : 0;
+  return {
+    path: cachePath,
+    fileSize,
+    total: Object.keys(data.entries).length,
+    fresh,
+    stale,
+    dead,
+    oldestAgeMs: oldest,
+    newestAgeMs: newest,
+  };
+}
+
+/** Remove entries older than `maxAgeMs` (default: STALE_MS). Returns count removed. */
+export async function prune(maxAgeMs: number = STALE_MS): Promise<number> {
+  const data = await load();
+  const now = Date.now();
+  let removed = 0;
+  for (const [k, e] of Object.entries(data.entries)) {
+    if (now - e.ts >= maxAgeMs) {
+      delete data.entries[k];
+      removed++;
+    }
+  }
+  if (removed > 0) {
+    dirty = true;
+    await flush();
+  }
+  return removed;
+}
+
 /**
  * Wait for any background SWR refreshes to settle. Called by the scanner
  * at the end of a scan so we don't lose updates when the CLI process exits.
