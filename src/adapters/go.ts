@@ -1,6 +1,7 @@
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { memoize } from "../cache";
+import { httpFetch } from "../http";
 import type { Adapter, Package } from "../types";
 import { cmpVersions, has, run } from "../util";
 
@@ -51,7 +52,7 @@ export const go: Adapter = {
           async () => {
             try {
               const url = `https://proxy.golang.org/${encodeURI(modulePath.toLowerCase())}/@latest`;
-              const res = await fetch(url);
+              const res = await httpFetch(url);
               if (!res.ok) return null;
               const body = (await res.json()) as { Version?: string };
               return body.Version ?? null;

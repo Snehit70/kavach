@@ -1,4 +1,5 @@
 import { memoize } from "../cache";
+import { httpFetch } from "../http";
 import type { Adapter, Package } from "../types";
 import { cmpVersions, has, run } from "../util";
 
@@ -31,9 +32,7 @@ export const cargo: Adapter = {
           `cargo:${c.name}`,
           async () => {
             try {
-              const res = await fetch(`https://crates.io/api/v1/crates/${c.name}`, {
-                headers: { "User-Agent": "pkgstate (https://github.com/local)" },
-              });
+              const res = await httpFetch(`https://crates.io/api/v1/crates/${c.name}`);
               if (!res.ok) return null;
               const body = (await res.json()) as { crate?: { max_stable_version?: string } };
               return body.crate?.max_stable_version ?? null;
