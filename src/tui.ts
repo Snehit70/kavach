@@ -50,6 +50,8 @@ interface UiState {
   confirm?: { cmds: { cmd: string[]; label: string }[]; title: string };
   /** Transient status text shown above the keymap. */
   flash?: string;
+  /** Errors-overlay visibility. */
+  showErrors: boolean;
 }
 
 function chunk(text: string, fg?: string, bg?: string): TextChunk {
@@ -134,6 +136,7 @@ export async function runTui(opts: { refresh?: boolean } = {}) {
     filterFocused: false,
     sortKey: "status",
     sortDir: "asc",
+    showErrors: false,
   };
 
   const root = new BoxRenderable(renderer, {
@@ -267,18 +270,34 @@ export async function runTui(opts: { refresh?: boolean } = {}) {
     headerText.content = `${prefix}${total} packages   ${outdated} outdated${suffix}`;
   };
 
+  const errorEntries = (): Array<{ manager: string; error: string }> => {
+    const r = state.scanResult;
+    if (!r) return [];
+    return Object.entries(r.perManager)
+      .filter(([, info]) => info.error)
+      .map(([manager, info]) => ({ manager, error: info.error as string }));
+  };
+
   const renderFooter = () => {
     if (state.confirm) {
       footerText.content = "y: run    n / Esc: cancel";
+      return;
+    }
+    if (state.showErrors) {
+      footerText.content = "Esc: close   ·   e: toggle";
       return;
     }
     if (state.filterFocused) {
       footerText.content = "type to filter  ·  Enter: leave  ·  Esc: clear & leave";
       return;
     }
+    const errs = errorEntries();
+    const errBadge = errs.length
+      ? `⚠ ${errs.length} adapter error${errs.length > 1 ? "s" : ""} — e to view   ·   `
+      : "";
     const base =
-      "/: filter   j/k: move   s: sort   S: reverse   u: update   U: update all visible   r: rescan   q: quit";
-    footerText.content = state.flash ? `${state.flash}   ·   ${base}` : base;
+      "/: filter   j/k: move   s: sort   S: reverse   u: update   U: update all visible   r: rescan   e: errors   q: quit";
+    footerText.content = (state.flash ? `${state.flash}   ·   ` : "") + errBadge + base;
   };
 
   const renderTable = () => {
@@ -333,6 +352,22 @@ export async function runTui(opts: { refresh?: boolean } = {}) {
   };
 
   const renderConfirm = () => {
+    if (state.showErrors) {
+      const errs = errorEntries();
+      overlay.visible = true;
+      overlay.title = ` adapter errors (${errs.length}) `;
+      if (errs.length === 0) {
+        overlayText.content = "No adapter errors this scan.\n\nPress Esc to close.";
+      } else {
+        const body = errs
+          .map(
+            ({ manager, error }) => `  • ${manager}\n      ${error.split("\n").join("\n      ")}`,
+          )
+          .join("\n\n");
+        overlayText.content = `${body}\n\nPress Esc or e to close.`;
+      }
+      return;
+    }
     if (!state.confirm) {
       overlay.visible = false;
       return;
@@ -452,6 +487,13 @@ export async function runTui(opts: { refresh?: boolean } = {}) {
   });
 
   renderer.keyInput.on("keypress", (key) => {
+    if (state.showErrors) {
+      if (key.name === "escape" || key.name === "e") {
+        state.showErrors = false;
+        rerender();
+      }
+      return;
+    }
     if (state.confirm) {
       if (key.name === "y") {
         const cmds = state.confirm.cmds;
@@ -507,6 +549,10 @@ export async function runTui(opts: { refresh?: boolean } = {}) {
         return;
       case "r":
         doScan(true).catch((e) => process.stderr.write(`${e}\n`));
+        return;
+      case "e":
+        state.showErrors = true;
+        rerender();
         return;
       case "s":
         state.sortKey = cyclesSortKey(state.sortKey);
