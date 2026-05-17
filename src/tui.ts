@@ -4,6 +4,7 @@ import {
   InputRenderable,
   InputRenderableEvents,
   RGBA,
+  StyledText,
   type TextChunk,
   TextRenderable,
   TextTableRenderable,
@@ -52,6 +53,8 @@ interface UiState {
   flash?: string;
   /** Errors-overlay visibility. */
   showErrors: boolean;
+  /** Detail pane visibility (below the table). */
+  showDetail: boolean;
 }
 
 function chunk(text: string, fg?: string, bg?: string): TextChunk {
@@ -137,6 +140,7 @@ export async function runTui(opts: { refresh?: boolean } = {}) {
     sortKey: "status",
     sortDir: "asc",
     showErrors: false,
+    showDetail: true,
   };
 
   const root = new BoxRenderable(renderer, {
@@ -204,6 +208,21 @@ export async function runTui(opts: { refresh?: boolean } = {}) {
   });
   tableBox.add(table);
   root.add(tableBox);
+
+  const detailBox = new BoxRenderable(renderer, {
+    id: "detailBox",
+    height: 9,
+    border: true,
+    borderColor: COLORS.border,
+    borderStyle: "rounded",
+    backgroundColor: COLORS.panel,
+    title: " detail ",
+    paddingLeft: 1,
+    paddingRight: 1,
+  });
+  const detailText = new TextRenderable(renderer, { id: "detailText", content: "" });
+  detailBox.add(detailText);
+  root.add(detailBox);
 
   const footer = new BoxRenderable(renderer, {
     id: "footer",
@@ -296,7 +315,7 @@ export async function runTui(opts: { refresh?: boolean } = {}) {
       ? `⚠ ${errs.length} adapter error${errs.length > 1 ? "s" : ""} — e to view   ·   `
       : "";
     const base =
-      "/: filter   j/k: move   s: sort   S: reverse   u: update   U: update all visible   r: rescan   e: errors   q: quit";
+      "/: filter   j/k: move   s: sort   S: reverse   u: update   U: update all visible   r: rescan   d: detail   e: errors   q: quit";
     footerText.content = (state.flash ? `${state.flash}   ·   ` : "") + errBadge + base;
   };
 
@@ -384,10 +403,53 @@ export async function runTui(opts: { refresh?: boolean } = {}) {
       `Press y to confirm, n to cancel.`;
   };
 
+  const renderDetail = () => {
+    detailBox.visible = state.showDetail;
+    if (!state.showDetail) return;
+    const hit = visibleHits()[state.selected];
+    if (!hit) {
+      detailBox.title = " detail ";
+      detailText.content = "(no package selected)";
+      return;
+    }
+    const p = hit.pkg;
+    const sCol = statusColor(p.status);
+    detailBox.title = ` detail — ${p.manager}/${p.name} `;
+    const lines: TextChunk[][] = [];
+    lines.push([
+      chunk("status:    ", COLORS.dim),
+      chunk(`${STATUS_GLYPH[p.status]} ${p.status}`, sCol),
+    ]);
+    lines.push([chunk("manager:   ", COLORS.dim), chunk(p.manager, COLORS.accent)]);
+    lines.push([chunk("name:      ", COLORS.dim), chunk(p.name, COLORS.text)]);
+    lines.push([chunk("installed: ", COLORS.dim), chunk(p.installed ?? "—", COLORS.text)]);
+    lines.push([
+      chunk("latest:    ", COLORS.dim),
+      chunk(p.latest ?? "—", p.status === "outdated" ? COLORS.outdated : COLORS.text),
+    ]);
+    lines.push([
+      chunk("update:    ", COLORS.dim),
+      chunk(p.updateCmd ? p.updateCmd.join(" ") : "(none)", COLORS.text),
+    ]);
+    if (p.extra && Object.keys(p.extra).length > 0) {
+      const extra = Object.entries(p.extra)
+        .map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`)
+        .join("  ·  ");
+      lines.push([chunk("extra:     ", COLORS.dim), chunk(extra, COLORS.dim)]);
+    }
+    const flat: TextChunk[] = [];
+    lines.forEach((row, i) => {
+      flat.push(...row);
+      if (i < lines.length - 1) flat.push(chunk("\n"));
+    });
+    detailText.content = new StyledText(flat);
+  };
+
   const rerender = () => {
     renderHeader();
     renderFooter();
     renderTable();
+    renderDetail();
     renderConfirm();
   };
 
@@ -549,6 +611,10 @@ export async function runTui(opts: { refresh?: boolean } = {}) {
         return;
       case "r":
         doScan(true).catch((e) => process.stderr.write(`${e}\n`));
+        return;
+      case "d":
+        state.showDetail = !state.showDetail;
+        rerender();
         return;
       case "e":
         state.showErrors = true;
