@@ -1,5 +1,6 @@
 import { allAdapters } from "./adapters";
 import { flush, memoizeJson, settle } from "./cache";
+import { loadPlugins } from "./plugins";
 import { saveSnapshot } from "./snapshot";
 import type { Package } from "./types";
 
@@ -39,9 +40,12 @@ export async function scan(
   const checkUpdates = opts.checkUpdates ?? true;
   const t0 = performance.now();
 
-  const available = await Promise.all(
-    allAdapters.map(async (a) => ((await a.available()) ? a : null)),
-  );
+  const plugins = await loadPlugins((file, err) => {
+    process.stderr.write(`pkgstate: plugin failed (${file}): ${err}\n`);
+  });
+  const seen = new Set(allAdapters.map((a) => a.name));
+  const merged = [...allAdapters, ...plugins.filter((p) => !seen.has(p.name))];
+  const available = await Promise.all(merged.map(async (a) => ((await a.available()) ? a : null)));
   const adapters = available.filter((a): a is NonNullable<typeof a> => a !== null);
 
   const perManager: ScanResult["perManager"] = {};
