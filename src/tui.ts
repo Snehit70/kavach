@@ -57,6 +57,8 @@ interface UiState {
   showErrors: boolean;
   /** Detail pane visibility (below the table). */
   showDetail: boolean;
+  /** Selected package keys (manager+name) for targeted bulk updates. */
+  marked: Set<string>;
 }
 
 function chunk(text: string, fg?: string, bg?: string): TextChunk {
@@ -143,7 +145,10 @@ export async function runTui(opts: { refresh?: boolean } = {}) {
     sortDir: "asc",
     showErrors: false,
     showDetail: true,
+    marked: new Set(),
   };
+
+  const pkgKey = (p: Package): string => `${p.manager}\x00${p.name}`;
 
   const root = new BoxRenderable(renderer, {
     id: "root",
@@ -316,8 +321,11 @@ export async function runTui(opts: { refresh?: boolean } = {}) {
     const errBadge = errs.length
       ? `⚠ ${errs.length} adapter error${errs.length > 1 ? "s" : ""} — e to view   ·   `
       : "";
+    const markedCount = state.marked.size;
+    const markedHint = markedCount ? `  (${markedCount} marked)` : "";
     const base =
-      "/: filter   j/k: move   s: sort   S: reverse   u: update   U: update all visible   r: rescan   d: detail   e: errors   q: quit";
+      "/: filter   j/k: move   space: mark   s: sort   S: reverse   u: update   U: update marked/visible   r: rescan   d: detail   e: errors   q: quit" +
+      markedHint;
     footerText.content = (state.flash ? `${state.flash}   ·   ` : "") + errBadge + base;
   };
 
@@ -346,10 +354,12 @@ export async function runTui(opts: { refresh?: boolean } = {}) {
     hits.forEach((hit, i) => {
       const p = hit.pkg;
       const isSel = i === state.selected;
+      const isMarked = state.marked.has(pkgKey(p));
       const bg = isSel ? COLORS.selectedBg : undefined;
       const sCol = statusColor(p.status);
+      const marker = isMarked ? "● " : "  ";
       rows.push([
-        [chunk(`${STATUS_GLYPH[p.status]} ${p.status}`, sCol, bg)],
+        [chunk(`${marker}${STATUS_GLYPH[p.status]} ${p.status}`, sCol, bg)],
         [chunk(p.manager, COLORS.accent, bg)],
         highlightedChunks(trunc(p.name, 60), hit.match?.positions, COLORS.text, bg),
         [chunk(trunc(p.installed ?? "", 28), COLORS.dim, bg)],
@@ -638,6 +648,23 @@ export async function runTui(opts: { refresh?: boolean } = {}) {
         state.selected = Math.max(0, visibleHits().length - 1);
         rerender();
         return;
+      case "space": {
+        const hit = visibleHits()[state.selected];
+        if (!hit) return;
+        const key = pkgKey(hit.pkg);
+        if (state.marked.has(key)) state.marked.delete(key);
+        else state.marked.add(key);
+        // Auto-advance for ergonomic multi-mark.
+        state.selected = Math.min(visibleHits().length - 1, state.selected + 1);
+        rerender();
+        return;
+      }
+      case "escape":
+        if (state.marked.size > 0) {
+          state.marked.clear();
+          rerender();
+        }
+        return;
       case "r":
         doScan(true).catch((e) => process.stderr.write(`${e}\n`));
         return;
@@ -675,16 +702,25 @@ export async function runTui(opts: { refresh?: boolean } = {}) {
         return;
       }
       case "U": {
-        const all = visibleHits()
-          .map((h) => h.pkg)
-          .filter((p) => p.status === "outdated" && p.updateCmd);
-        if (all.length === 0) {
-          flash("nothing visible to update");
+        // When the user has marked rows explicitly, target those (regardless of
+        // status). Otherwise fall back to "all visible outdated".
+        let candidates: Package[];
+        if (state.marked.size > 0) {
+          candidates = visibleHits()
+            .map((h) => h.pkg)
+            .filter((p) => state.marked.has(pkgKey(p)) && p.updateCmd);
+        } else {
+          candidates = visibleHits()
+            .map((h) => h.pkg)
+            .filter((p) => p.status === "outdated" && p.updateCmd);
+        }
+        if (candidates.length === 0) {
+          flash(state.marked.size > 0 ? "no updatable marked rows" : "nothing visible to update");
           return;
         }
-        const batched = batchUpdates(all);
+        const batched = batchUpdates(candidates);
         state.confirm = {
-          title: `update ${all.length} package(s) in ${batched.length} call(s)`,
+          title: `update ${candidates.length} package(s) in ${batched.length} call(s)`,
           cmds: batched.map((b) => ({ cmd: b.cmd, label: b.label })),
         };
         rerender();
