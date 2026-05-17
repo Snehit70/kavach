@@ -5,6 +5,7 @@ import { scan } from "./scanner";
 import { listArchives } from "./snapshot";
 import { runTui } from "./tui";
 import { queryAll } from "./vuln";
+import { runWeb } from "./web";
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -105,6 +106,13 @@ async function main() {
     process.exit(2);
   }
 
+  if (cmd === "web") {
+    const portIdx = args.indexOf("--port");
+    const port = portIdx >= 0 && args[portIdx + 1] ? Number.parseInt(args[portIdx + 1]!, 10) : 4321;
+    await runWeb({ port });
+    return;
+  }
+
   if (cmd === "vulns") {
     const result = await scan({ awaitBackground: true });
     process.stderr.write(`Querying OSV.dev for ${result.packages.length} packages…\n`);
@@ -181,6 +189,7 @@ Usage:
   pkgstate cache prune    Remove dead (past-stale) entries
   pkgstate diff           Diff the two most recent snapshots
   pkgstate vulns          Cross-reference installed packages against OSV.dev
+  pkgstate web [--port N] Serve a small browser UI (default port 4321)
   pkgstate help           Show this message
 `);
 }
