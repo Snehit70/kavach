@@ -9,6 +9,7 @@ import {
   TextRenderable,
   TextTableRenderable,
 } from "@opentui/core";
+import { batchUpdates } from "./batch";
 import { applyFilter, type FilterHit, type ParsedFilter, parseFilter } from "./filter";
 import { type ScanResult, scan } from "./scanner";
 import { loadSnapshot } from "./snapshot";
@@ -653,12 +654,10 @@ export async function runTui(opts: { refresh?: boolean } = {}) {
           flash("nothing visible to update");
           return;
         }
+        const batched = batchUpdates(all);
         state.confirm = {
-          title: `update ${all.length} visible package(s)`,
-          cmds: all.map((p) => ({
-            cmd: p.updateCmd!,
-            label: `${p.manager}/${p.name}  →  ${p.updateCmd!.join(" ")}`,
-          })),
+          title: `update ${all.length} package(s) in ${batched.length} call(s)`,
+          cmds: batched.map((b) => ({ cmd: b.cmd, label: b.label })),
         };
         rerender();
         return;
