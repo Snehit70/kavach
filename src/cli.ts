@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { stats as cacheStats, clear as clearCache, flush, prune as pruneCache } from "./cache";
+import { runDaemon } from "./daemon";
 import { diffScans } from "./diff";
 import { scan } from "./scanner";
 import { listArchives } from "./snapshot";
@@ -106,6 +107,15 @@ async function main() {
     process.exit(2);
   }
 
+  if (cmd === "daemon") {
+    const intervalIdx = args.indexOf("--interval");
+    const intervalMin =
+      intervalIdx >= 0 && args[intervalIdx + 1] ? Number.parseInt(args[intervalIdx + 1]!, 10) : 360;
+    const once = args.includes("--once");
+    await runDaemon({ intervalMs: intervalMin * 60_000, once });
+    return;
+  }
+
   if (cmd === "web") {
     const portIdx = args.indexOf("--port");
     const port = portIdx >= 0 && args[portIdx + 1] ? Number.parseInt(args[portIdx + 1]!, 10) : 4321;
@@ -190,6 +200,8 @@ Usage:
   pkgstate diff           Diff the two most recent snapshots
   pkgstate vulns          Cross-reference installed packages against OSV.dev
   pkgstate web [--port N] Serve a small browser UI (default port 4321)
+  pkgstate daemon         Periodic rescans + desktop notifications on new outdated
+                          [--interval MIN]  (default 360)  [--once]
   pkgstate help           Show this message
 `);
 }
