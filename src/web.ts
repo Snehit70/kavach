@@ -1,105 +1,172 @@
-import { scan } from "./scanner";
+import { type ScanResult, scan } from "./scanner";
 import { loadSnapshot } from "./snapshot";
+import appJsAsset from "./web/app.js" with { type: "text" };
+import indexHtmlAsset from "./web/index.html" with { type: "text" };
+import styleCssAsset from "./web/style.css" with { type: "text" };
 
-const indexHtml = `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>pkgstate</title>
-<style>
-  :root { color-scheme: dark; }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; padding: 1.5rem;
-    font: 14px ui-sans-serif, system-ui, sans-serif;
-    background: #0e1015; color: #dcdfe8;
+// `with { type: "text" }` inlines the file contents (also inside `bun build --compile`
+// binaries), but TypeScript types these imports by file extension, so narrow them here.
+const indexHtml = indexHtmlAsset as unknown as string;
+const appJs = appJsAsset as unknown as string;
+const styleCss = styleCssAsset as unknown as string;
+
+const CSP = [
+  "default-src 'none'",
+  "script-src 'self'",
+  "style-src 'self'",
+  "connect-src 'self'",
+  "img-src 'self' data:",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'none'",
+].join("; ");
+
+const SECURITY_HEADERS = {
+  "Content-Security-Policy": CSP,
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "no-referrer",
+  "Cross-Origin-Resource-Policy": "same-origin",
+};
+
+const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
+
+export interface WebDeps {
+  /** Bind host; extra hostnames allowed in the Host header when not loopback. */
+  host: string;
+  loadSnapshot: typeof loadSnapshot;
+  scan: (opts: { refresh: boolean }) => Promise<ScanResult>;
+}
+
+function hostname(hostHeader: string): string {
+  // "localhost:4321" -> "localhost", "[::1]:4321" -> "[::1]"
+  if (hostHeader.startsWith("[")) return hostHeader.slice(0, hostHeader.indexOf("]") + 1);
+  return hostHeader.split(":")[0] ?? "";
+}
+
+function originHost(origin: string): string | null {
+  try {
+    return new URL(origin).host;
+  } catch {
+    return null; // e.g. "null" from sandboxed contexts
   }
-  header { display: flex; gap: 1rem; align-items: center; margin-bottom: 1rem; }
-  h1 { margin: 0; font-size: 1.1rem; }
-  input { flex: 1; background: #161922; color: #dcdfe8; border: 1px solid #2a2f3a;
-    padding: .4rem .6rem; border-radius: .25rem; }
-  button { background: #7c5cff; color: white; border: 0; padding: .4rem .8rem;
-    border-radius: .25rem; cursor: pointer; }
-  table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: left; padding: .3rem .5rem; border-bottom: 1px solid #2a2f3a; }
-  th { color: #6b7280; font-weight: 500; }
-  .outdated { color: #ff8a4c; }
-  .up-to-date { color: #4ade80; }
-  .unknown { color: #94a3b8; }
-  .manager { color: #7c5cff; }
-  .summary { color: #6b7280; margin-bottom: .5rem; }
-</style>
-</head>
-<body>
-<header>
-  <h1>pkgstate</h1>
-  <input id="q" placeholder="filter…" />
-  <button id="refresh">Refresh</button>
-</header>
-<div class="summary" id="summary">loading…</div>
-<table>
-  <thead><tr><th>Status</th><th>Manager</th><th>Name</th><th>Installed</th><th>Latest</th></tr></thead>
-  <tbody id="rows"></tbody>
-</table>
-<script>
-let packages = [];
-const summary = document.getElementById('summary');
-const rows = document.getElementById('rows');
-const q = document.getElementById('q');
-
-function render() {
-  const filter = q.value.toLowerCase();
-  const filtered = packages.filter(p =>
-    !filter || (p.name + ' ' + p.manager).toLowerCase().includes(filter)
-  );
-  rows.innerHTML = filtered.slice(0, 500).map(p =>
-    '<tr>' +
-    '<td class="' + p.status + '">' + p.status + '</td>' +
-    '<td class="manager">' + p.manager + '</td>' +
-    '<td>' + p.name + '</td>' +
-    '<td>' + (p.installed ?? '') + '</td>' +
-    '<td class="' + (p.status === 'outdated' ? 'outdated' : '') + '">' + (p.latest ?? '') + '</td>' +
-    '</tr>'
-  ).join('');
-  const outdated = filtered.filter(p => p.status === 'outdated').length;
-  summary.textContent = filtered.length + ' shown   ·   ' + outdated + ' outdated   ·   ' +
-    packages.length + ' total';
 }
 
-q.addEventListener('input', render);
-document.getElementById('refresh').addEventListener('click', () => load(true));
-
-async function load(refresh) {
-  const res = await fetch('/api/packages' + (refresh ? '?refresh=1' : ''));
-  const data = await res.json();
-  packages = data.packages;
-  render();
+function respond(
+  body: string,
+  init: { status?: number; type?: string; headers?: Record<string, string> } = {},
+): Response {
+  const headers: Record<string, string> = { ...SECURITY_HEADERS, ...init.headers };
+  if (init.type) headers["Content-Type"] = init.type;
+  return new Response(body, { status: init.status ?? 200, headers });
 }
-load(false);
-</script>
-</body>
-</html>`;
 
-export async function runWeb(opts: { port?: number } = {}): Promise<void> {
-  const port = opts.port ?? 4321;
-  const server = Bun.serve({
-    port,
-    routes: {
-      "/": new Response(indexHtml, { headers: { "Content-Type": "text/html; charset=utf-8" } }),
-      "/api/packages": {
-        async GET(req) {
-          const url = new URL(req.url);
-          const refresh = url.searchParams.has("refresh");
-          // Fast path: serve from snapshot when not refreshing.
-          if (!refresh) {
-            const snap = await loadSnapshot();
-            if (snap) return Response.json({ packages: snap.result.packages, ageMs: snap.ageMs });
-          }
-          const result = await scan({ refresh, awaitBackground: true });
-          return Response.json({ packages: result.packages, ageMs: 0 });
-        },
-      },
-    },
+function json(data: unknown, status = 200): Response {
+  return respond(JSON.stringify(data), {
+    status,
+    type: "application/json; charset=utf-8",
+    headers: { "Cache-Control": "no-store" },
   });
-  process.stdout.write(`pkgstate web on http://localhost:${server.port}\n`);
+}
+
+/**
+ * Request handler, separated from `Bun.serve` so it can be tested directly.
+ *
+ * The server only ever listens on loopback by default, but a local web page
+ * could still reach it (DNS rebinding, cross-site POSTs), so every request
+ * has its Host checked and state-changing requests must be same-origin.
+ */
+export function createHandler(deps: WebDeps): (req: Request) => Promise<Response> {
+  const allowedHosts = new Set(LOOPBACK);
+  if (deps.host && deps.host !== "0.0.0.0" && deps.host !== "::") allowedHosts.add(deps.host);
+  const anyHost = deps.host === "0.0.0.0" || deps.host === "::";
+  let inFlight: Promise<ScanResult> | null = null;
+
+  const refresh = (): Promise<ScanResult> => {
+    // Concurrent refresh clicks share one scan instead of stampeding the managers.
+    inFlight ??= deps.scan({ refresh: true }).finally(() => {
+      inFlight = null;
+    });
+    return inFlight;
+  };
+
+  const payload = (result: ScanResult, ageMs: number) => ({
+    packages: result.packages,
+    perManager: result.perManager,
+    totalMs: result.totalMs,
+    ageMs,
+  });
+
+  return async (req) => {
+    const url = new URL(req.url);
+    const host = req.headers.get("host") ?? "";
+    if (!anyHost && !allowedHosts.has(hostname(host))) {
+      return respond("forbidden host\n", { status: 403, type: "text/plain; charset=utf-8" });
+    }
+
+    if (req.method === "GET" || req.method === "HEAD") {
+      switch (url.pathname) {
+        case "/":
+          return respond(indexHtml, { type: "text/html; charset=utf-8" });
+        case "/app.js":
+          return respond(appJs, { type: "text/javascript; charset=utf-8" });
+        case "/style.css":
+          return respond(styleCss, { type: "text/css; charset=utf-8" });
+        case "/api/packages": {
+          try {
+            const snap = await deps.loadSnapshot();
+            if (snap) return json(payload(snap.result, snap.ageMs));
+            return json(payload(await deps.scan({ refresh: false }), 0));
+          } catch (err) {
+            return json({ error: err instanceof Error ? err.message : String(err) }, 500);
+          }
+        }
+      }
+      return respond("not found\n", { status: 404, type: "text/plain; charset=utf-8" });
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/refresh") {
+      const origin = req.headers.get("origin");
+      if (origin !== null && originHost(origin) !== host) {
+        return respond("cross-origin request rejected\n", {
+          status: 403,
+          type: "text/plain; charset=utf-8",
+        });
+      }
+      try {
+        return json(payload(await refresh(), 0));
+      } catch (err) {
+        return json({ error: err instanceof Error ? err.message : String(err) }, 500);
+      }
+    }
+
+    return respond("method not allowed\n", {
+      status: 405,
+      type: "text/plain; charset=utf-8",
+      headers: { Allow: "GET, HEAD, POST" },
+    });
+  };
+}
+
+export async function runWeb(opts: { port?: number; host?: string } = {}): Promise<void> {
+  const port = opts.port ?? 4321;
+  const host = opts.host ?? "127.0.0.1";
+  const handler = createHandler({
+    host,
+    loadSnapshot,
+    scan: ({ refresh }) => scan({ refresh, awaitBackground: true }),
+  });
+  const server = Bun.serve({ port, hostname: host, fetch: handler });
+  if (host === "0.0.0.0" || host === "::") {
+    process.stderr.write(
+      "pkgstate: warning — listening on all interfaces; anyone on your network can read your package inventory.\n",
+    );
+  }
+  const shown = host.includes(":") ? `[${host}]` : host;
+  process.stdout.write(`pkgstate web on http://${shown}:${server.port}\n`);
+  const stop = () => {
+    server.stop();
+    process.exit(0);
+  };
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
 }

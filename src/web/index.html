@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>pkgstate</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<a class="skip" href="#table">Skip to packages</a>
+<header class="top">
+  <h1>pkgstate</h1>
+  <p class="meta" id="meta" role="status" aria-live="polite">Loading…</p>
+  <button id="refresh" class="btn primary" type="button">
+    <span class="spinner" aria-hidden="true"></span><span id="refresh-label">Refresh</span>
+  </button>
+</header>
+
+<main>
+  <section class="toolbar" aria-label="Filters">
+    <div class="search">
+      <label class="sr-only" for="q">Filter packages</label>
+      <input id="q" type="search" placeholder="Filter by name or manager" autocomplete="off" spellcheck="false">
+      <kbd aria-hidden="true">/</kbd>
+    </div>
+    <div class="seg" id="status" role="group" aria-label="Status"></div>
+  </section>
+  <div class="chips" id="managers" role="group" aria-label="Package managers"></div>
+
+  <div id="banner" hidden></div>
+
+  <div class="table-wrap">
+    <table id="table">
+      <thead>
+        <tr>
+          <th scope="col" data-sort="status">Status</th>
+          <th scope="col" data-sort="manager">Manager</th>
+          <th scope="col" data-sort="name">Name</th>
+          <th scope="col" data-sort="installed">Installed</th>
+          <th scope="col" data-sort="latest">Latest</th>
+          <th scope="col" class="sr-only">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div id="empty" class="empty" hidden></div>
+  </div>
+  <div class="more"><button id="more" class="btn" type="button" hidden></button></div>
+</main>
+
+<footer>
+  <span><kbd>/</kbd> filter</span>
+  <span><kbd>Esc</kbd> clear</span>
+  <span><kbd>r</kbd> refresh</span>
+</footer>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script src="/app.js" defer></script>
+</body>
+</html>
