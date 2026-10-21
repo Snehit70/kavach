@@ -13,7 +13,7 @@ This directory is the long-form reference. Start here, then drill into whichever
 | [tui.md](tui.md) | Screen layout, keymap, focus model, fuzzy/`:`-filter grammar, sort cycle, update flow. |
 | [filter-language.md](filter-language.md) | Reference for the fuzzy + `:`-scope filter expressions, with examples. |
 | [cli.md](cli.md) | `pkgstate`, `pkgstate scan`, flags, exit codes, the JSON output shape. |
-| [caching.md](caching.md) | Why network adapters (`cargo`, `go`) cache, the on-disk format, TTL, how to bust it. |
+| [caching.md](caching.md) | Why registry lookups and adapter results cache, the on-disk format, TTL, how to bust it. |
 | [adding-an-adapter.md](adding-an-adapter.md) | Step-by-step guide for adding a new package manager. |
 | [troubleshooting.md](troubleshooting.md) | Common failure modes — slow scans, missing managers, broken cache, sudo prompts. |
 
@@ -27,4 +27,16 @@ bun run src/cli.ts scan     # one-shot scan
 
 ## Mental model in one paragraph
 
-`pkgstate` is a fan-out scanner with a thin TUI on top. The scanner asks every adapter "are you available?", then runs every available adapter in parallel. Each adapter answers a simple question — "what's installed, and what's the latest version?" — by shelling out to its package manager and, when needed, hitting a public registry (crates.io for `cargo`, proxy.golang.org for `go`). Results are merged into a single sorted list of `Package` records and handed to the UI, which lets you filter, navigate, and trigger updates. Updates suspend the TUI, run the underlying command with the real terminal attached (so `sudo` prompts work), and then resume and rescan.
+`pkgstate` is a fan-out scanner with a thin TUI on top. The scanner asks every adapter "are you available?", then runs every available adapter in parallel. Each adapter answers a simple question — "what's installed, and what's the latest version?" — by shelling out to its package manager and, when needed, hitting a public registry. Results are merged into a single sorted list of `Package` records and handed to the UI, which lets you filter, navigate, and trigger updates. Updates suspend the TUI, run the underlying argv command with the real terminal attached (so `sudo` prompts work), and then resume and rescan.
+
+## Release checklist
+
+```sh
+bun run check
+bun run build
+bun run src/cli.ts help
+bun run src/cli.ts cache show
+bun run src/cli.ts scan --no-check-updates --manager npm --json
+```
+
+Run `build:all` only in an environment that has all OpenTUI native platform packages resolvable for the requested targets.

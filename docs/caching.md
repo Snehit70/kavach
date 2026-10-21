@@ -1,15 +1,18 @@
 # Caching
 
-Implemented in `src/cache.ts`. Only network-dependent adapters use it.
+Implemented in `src/cache.ts` and used by both registry lookups and short-lived whole-adapter scan results.
 
 ## Why a cache exists
 
-Two adapters need to ask a public registry for "what's the latest":
+Some adapters need to ask a public registry for "what's the latest":
 
+- **`bun`** → npm registry `/<name>/latest`
 - **`cargo`** → `https://crates.io/api/v1/crates/<name>`
 - **`go`** → `https://proxy.golang.org/<module-path>/@latest`
 
-A user can easily have dozens of cargo-installed crates and Go binaries. Without caching, every scan would block on dozens of HTTP requests. The local managers (`dnf`, `flatpak`, `snap`, `brew`, `pip`, `npm`, `gem`) skip the cache entirely — they have their own metadata caches and asking them twice is already cheap.
+A user can easily have dozens of globally installed packages or Go binaries. Without caching, every scan would block on dozens of HTTP requests.
+
+The scanner also memoizes each adapter result for a shorter window. That cache smooths out repeated CLI/TUI scans while still letting package-manager state refresh quickly.
 
 ## Lifecycle: stale-while-revalidate
 
@@ -27,7 +30,7 @@ Entries pass through three lifecycle windows:
 - **Stale-but-usable** (`freshMs ≤ age < staleMs`, default 7 days): return the cached value *immediately*, but kick off a background refresh so the next scan sees the new value. The scan does **not** wait for the refresh.
 - **Dead** (`age ≥ staleMs`): treat as a miss and block on a fresh fetch.
 
-This is the textbook stale-while-revalidate pattern, scoped per cache key.
+This is the textbook stale-while-revalidate pattern, scoped per cache key. Registry entries default to 1 h fresh / 7 d stale. Adapter-result entries default to 15 min fresh / 2 h stale.
 
 ### Why this matters for pkgstate
 
@@ -57,8 +60,11 @@ Respects `XDG_CACHE_HOME` if set.
 {
   "version": 1,
   "entries": {
-    "cargo:bat":     { "ts": 1731700000000, "value": "0.24.0" },
-    "cargo:dead":    { "ts": 1731700000000, "value": null, "freshMs": 3600000 },
+    "adapter:npm":   { "ts": 1731700000000, "value": "[...json...]" },
+    "adapter:npm:no-check": { "ts": 1731700000000, "value": "[...json...]" },
+    "bun:typescript": { "ts": 1731700000000, "value": "5.9.3" },
+    "cargo:bat":    { "ts": 1731700000000, "value": "0.24.0" },
+    "cargo:dead":   { "ts": 1731700000000, "value": null, "freshMs": 3600000 },
     "go:github.com/joshmedeski/sesh/v2": { "ts": 1731700000000, "value": "v2.26.2" }
   }
 }
@@ -66,10 +72,10 @@ Respects `XDG_CACHE_HOME` if set.
 
 - `version` lets us bump the schema. Older / unrecognised files are silently dropped to an empty cache.
 - `ts` is `Date.now()` ms when the value was written.
-- `value` is a version string. `null` is a valid value meaning "the lookup failed."
+- `value` is a string. For registry entries it is a version; for `memoizeJson` entries it is serialized JSON. `null` is a valid value meaning "the lookup failed."
 - `freshMs` is the override-fresh-window for this entry (used for negative caching). Absent → use the global default.
 
-Writes are **atomic**: we write to `cache.json.tmp` and `mv` over the real file, so a crash mid-write doesn't corrupt the cache.
+Writes are **atomic**: we write to a uniquely named `cache.json.<pid>.<ts>.tmp` and `rename` it over the real file (the TUI, daemon and CLI may flush at once), so a crash mid-write doesn't corrupt the cache.
 
 ## API
 
@@ -115,6 +121,8 @@ When `latest === null`, adapters should set `status: "unknown"` rather than `"up
 |----------|---------|----------|
 | `FRESH_MS` | 1 hour | `opts.freshMs` per call |
 | `STALE_MS` | 7 days | `opts.staleMs` per call |
+| Adapter result fresh | 15 minutes | `[cache].freshMs` in config |
+| Adapter result stale | 2 hours | `[cache].staleMs` in config |
 | `freshMsOnNull` | 1 hour | `opts.freshMsOnNull` per call |
 | Flush debounce | 200 ms | not configurable |
 
@@ -132,6 +140,5 @@ Across processes, two `pkgstate` runs racing on the same key issue independent H
 
 ## What the cache does *not* store
 
-- Installed-package listings (always re-read; cheap).
-- Scan results (no historical record).
+- Long-term installed-package history.
 - Anything from the underlying managers (their own metadata caches are out of scope).

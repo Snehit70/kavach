@@ -17,13 +17,23 @@ export const pacman: Adapter = {
     return has("pacman");
   },
 
-  async scan() {
+  async scan({ checkUpdates }) {
     // ── installed ────────────────────────────────────────────────
     const list = await run(["pacman", "-Q"], { timeoutMs: 15_000 });
     const installed = new Map<string, string>();
     for (const line of list.stdout.split("\n")) {
       const [name, version] = line.split(" ");
       if (name && version) installed.set(name, version);
+    }
+
+    if (!checkUpdates) {
+      return [...installed].map<Package>(([name, version]) => ({
+        manager: "pacman",
+        name,
+        installed: version,
+        status: "unknown",
+        updateCmd: ["sudo", "pacman", "-S", "--noconfirm", name],
+      }));
     }
 
     // ── outdated ─────────────────────────────────────────────────
@@ -64,7 +74,7 @@ export const pacman: Adapter = {
 import { pacman } from "./pacman";
 
 export const allAdapters: Adapter[] = [
-  dnf, flatpak, snap, brew, pip, npm, cargo, gem, go,
+  dnf, flatpak, snap, brew, pip, pipx, npm, pnpm, bun, cargo, gem, go, vscode, gh,
   pacman,                                              // ← add here
 ];
 ```
@@ -77,6 +87,7 @@ That's it. The scanner will probe `available()` on the next run; the TUI and JSO
 |---------|-----------|
 | **`available()` is fast and silent.** | Use `has("<bin>")` from `src/util.ts`. Never throw. If the manager has a daemon (e.g. snap), `has("<cli>")` is still enough. |
 | **Argv, never a shell string.** | Build commands as `string[]` and pass to `run()`. No `bash -c`, no interpolation. |
+| **Respect `checkUpdates`.** | When `checkUpdates` is false, skip slow latest/outdated metadata and return installed rows as `unknown`. |
 | **Timeouts everywhere.** | Every `run(...)` call gets a `timeoutMs`. Pick something generous but bounded — even a hung registry shouldn't freeze the scanner. |
 | **Tolerate parse errors.** | Wrap every `JSON.parse` and every regex extraction so a single weirdly-formatted line doesn't drop the whole manager. Worst case: return `[]`. |
 | **Manager-native version strings.** | Don't normalize. Don't strip prefixes. Whatever the manager prints is what we display. |
@@ -101,7 +112,7 @@ const latest = await memoize(
 );
 ```
 
-When `latest === null`, set `status: "unknown"` rather than `"up-to-date"`. The TUI will show a `?` glyph.
+When `latest === null`, set `status: "unknown"` rather than `"up-to-date"`. The TUI will show a `·` glyph.
 
 ## Version comparison
 
@@ -124,9 +135,11 @@ out.push({
 
 ## Testing it
 
-There's no test suite (yet). The smoke test is:
+Add focused tests for parsing and scanner behavior where practical. The smoke test is:
 
 ```sh
+bun test
+bun run src/cli.ts scan --manager pacman --no-check-updates --json | jq '.perManager.pacman'
 bun run src/cli.ts scan --json | jq '.perManager.pacman'
 bun run src/cli.ts                # then visually skim the UI
 ```

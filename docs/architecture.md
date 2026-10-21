@@ -4,14 +4,21 @@
 
 ```
 src/
-├── cli.ts          # entry point — dispatches to TUI or `scan`
+├── cli.ts          # entry point — dispatches subcommands
 ├── tui.ts          # opentui UI: layout, keymap, render loop
 ├── scanner.ts      # parallel adapter runner, aggregates results
 ├── cache.ts        # SWR JSON cache for network lookups (~/.cache/pkgstate/cache.json)
+├── batch.ts        # validates and groups argv-shaped update commands
+├── clipboard.ts    # best-effort terminal clipboard integration
+├── web.ts          # `pkgstate web`: loopback Bun.serve, createHandler() is unit-tested
+├── web/            # index.html, app.js, style.css — embedded into the bundle as text imports
+├── vuln.ts         # OSV.dev lookups; failures throw and are never cached as "clean"
+├── daemon.ts       # periodic scans + desktop notifications
+├── config.ts       # config.toml parsing/validation (parseConfig)
 ├── fuzzy.ts        # fzf-style scorer with match positions
 ├── filter.ts       # parses ":outdated", ":m=pip rich", etc. and applies them
 ├── sort.ts         # cycleable sort key/direction
-├── util.ts         # has(), run(), cmpVersions()
+├── util.ts         # has(), run() (never throws; 127 on spawn failure, 124 on timeout), cmpVersions()
 ├── types.ts        # Package, Status, Adapter
 └── adapters/
     ├── index.ts    # allAdapters[] registry
@@ -20,10 +27,15 @@ src/
     ├── snap.ts     # snap list + snap refresh --list
     ├── brew.ts     # brew list + brew outdated --json=v2
     ├── pip.ts      # pip list (--user) + --outdated
+    ├── pipx.ts     # pipx list --json
     ├── npm.ts      # npm ls -g + npm outdated -g
+    ├── pnpm.ts     # pnpm list/outdated -g
+    ├── bun.ts      # bun pm ls -g + npm registry latest
     ├── cargo.ts    # cargo install --list + crates.io API
     ├── gem.ts      # gem list + gem outdated
-    └── go.ts       # binaries in $GOBIN + proxy.golang.org @latest
+    ├── go.ts       # binaries in $GOBIN + proxy.golang.org @latest
+    ├── vscode.ts   # code --list-extensions --show-versions
+    └── gh.ts       # gh extension list
 ```
 
 ## The `Package` record
@@ -45,8 +57,8 @@ interface Package {
 A few intentional choices:
 
 - **Version strings stay manager-native.** RPM versions, Go pseudo-versions, gem versions, and crates.io versions don't share a single grammar. Cross-manager comparison isn't meaningful, so we don't try.
-- **`updateCmd` is per-package and argv-shaped.** No shell, no interpolation. The TUI can show it verbatim and `Bun.spawn` it directly. Some commands prepend `sudo` (e.g. dnf, snap, system flatpak); see [adapters.md](adapters.md).
-- **`status: "unknown"` is a legitimate value.** Network adapters (cargo, go) downgrade to `unknown` when the registry lookup fails. The TUI shows them with a `?` glyph rather than mis-claiming up-to-date.
+- **`updateCmd` is per-package and argv-shaped.** No shell, no interpolation. The TUI validates it before confirmation and runs it with `Bun.spawn`. Some commands prepend `sudo` (e.g. dnf, snap); see [adapters.md](adapters.md).
+- **`status: "unknown"` is a legitimate value.** Adapters use it when latest metadata was skipped or unavailable. The TUI shows those rows with a `·` glyph rather than mis-claiming up-to-date.
 
 ## Data flow
 
@@ -91,9 +103,16 @@ A few intentional choices:
                      scan --json            TUI (tui.ts)
 ```
 
-## Parallelism
+## Parallelism and caching
 
-`scanner.scan()` runs every available adapter concurrently with `Promise.all`. Inside each adapter, network lookups (cargo per-crate, go per-binary) also fan out with `Promise.all`. This matters because a fresh, uncached scan does dozens of HTTP requests; doing them sequentially would dominate wall-clock time.
+`scanner.scan()` runs every available adapter concurrently with `Promise.all`. Inside adapters, network lookups such as cargo/go/bun registry calls also fan out with `Promise.all`. HTTP concurrency is bounded by `src/http.ts` and configurable under `[http].concurrency`.
+
+Whole-adapter results are cached separately for check and no-check scans:
+
+- `adapter:<manager>` for normal scans.
+- `adapter:<manager>:no-check` for installed-only scans.
+
+This prevents a fast no-check scan from poisoning the normal latest-aware cache.
 
 A failing adapter never blocks the others. Errors are caught inside the scanner loop and surfaced in `perManager[name].error` rather than thrown.
 
@@ -105,13 +124,15 @@ Every adapter exports a single value satisfying:
 interface Adapter {
   name: string;
   available(): Promise<boolean>;
-  scan(opts: { refresh: boolean }): Promise<Package[]>;
+  scan(opts: { refresh: boolean; checkUpdates: boolean }): Promise<Package[]>;
 }
 ```
 
 - `name` — short id used in the UI and JSON output.
 - `available()` — cheap probe (usually `command -v <bin>`). Must not throw. Returning `false` removes the adapter from this run silently.
-- `scan({ refresh })` — does the actual work. `refresh: true` means "ignore the cache" and is forwarded to `cache.memoize(...)`.
+- `scan({ refresh, checkUpdates })` — does the actual work. `refresh: true` means "ignore the cache" and is forwarded to `cache.memoize(...)`. `checkUpdates: false` means installed-only discovery; adapters should skip slow latest/outdated calls and return `unknown` status when freshness was not checked.
+
+Adapters must tolerate optional metadata parse failures. A failing adapter never blocks the others; errors are caught inside the scanner loop and surfaced in `perManager[name].error` rather than thrown out of the whole scan. Plugin adapters that reuse a built-in name are ignored so cache keys and result maps stay unambiguous.
 
 Everything else (cache use, network calls, argv shape) is up to the adapter. See [adding-an-adapter.md](adding-an-adapter.md) for a recipe.
 
@@ -126,7 +147,7 @@ Single-threaded JS, like always. The "parallel" scans are concurrent I/O — eac
 
 ## What deliberately isn't here
 
-- **No "update everything" command.** Too risky; the scope is "report + guided per-package update."
+- **No non-interactive "update everything" command.** Batch updates exist only in the interactive TUI and require explicit confirmation.
 - **No version normalization.** See above.
 - **No sudo-credential caching.** We just inherit stdio when running updates; sudo handles its own timestamp.
-- **No persistent state beyond the latest-version cache.** Scan results are not stored; every TUI launch does a fresh scan.
+- **No package database.** The cache stores latest metadata and short-lived adapter results; snapshots are archived for diff/history, but every launch can rescan from package-manager state.

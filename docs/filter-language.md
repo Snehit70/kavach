@@ -1,6 +1,6 @@
 # Filter language
 
-A small expression you type into the `/` filter (or build via `pkgstate scan --filter` once that lands). Parsed by `src/filter.ts`.
+A small expression you type into the `/` filter or pass to `pkgstate scan --filter`. Parsed by `src/filter.ts`.
 
 ## TL;DR
 
@@ -51,7 +51,7 @@ Returns matched positions for highlighting in the **PACKAGE** column.
 | `:m=npm` | All globally-installed npm packages. |
 | `:m=npm :outdated` | Outdated npm globals. |
 | `:m=pip rich` | pip packages whose name fuzzy-matches "rich". |
-| `:s=unknown` | Cargo/Go entries where the registry lookup failed. |
+| `:s=unknown` | Entries where latest metadata was skipped or unavailable. |
 | `:m=go aws` | Go binaries fuzzy-matching "aws". |
 | `bat ripgrep` | Both names — only matches a row that fuzzy-matches *both*, which is rare; usually you want one or the other. |
 

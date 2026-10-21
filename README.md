@@ -11,19 +11,27 @@ Auto-detected; any that aren't installed are skipped silently.
 - `snap`
 - `brew` (Homebrew / Linuxbrew)
 - `pip` (user site)
+- `pipx`
 - `npm` (global)
+- `pnpm` (global)
+- `bun` (global)
 - `cargo` (installed binaries — latest checked via crates.io)
 - `gem`
 - `go` (binaries in `$GOBIN` / `$GOPATH/bin` — latest checked via proxy.golang.org)
+- `vscode` (VS Code extensions)
+- `gh-ext` (GitHub CLI extensions)
 
 ## Install
 
 ```sh
-uv sync
-uv run pkgstate          # launch the TUI
-uv run pkgstate scan     # plain JSON output
-uv run pkgstate scan --json
+bun install
+bun run src/cli.ts              # launch the TUI
+bun run src/cli.ts scan         # human summary + outdated table
+bun run src/cli.ts scan --json  # machine-readable output
+bun run build                   # compile ./dist/pkgstate
 ```
+
+For local shell use, run `bun link` from this repo and then call `pkgstate`.
 
 ## TUI keys
 
@@ -33,6 +41,9 @@ uv run pkgstate scan --json
 | `j` / `k` (or arrows) | Move selection |
 | `s` | Cycle sort column (status, manager, name, installed, latest) |
 | `S` | Reverse sort |
+| `o` | Toggle outdated-only filter |
+| `m` | Toggle manager grouping |
+| `y` / `Y` | Copy selected package id / update command |
 | `u` | Update highlighted package (confirms first) |
 | `U` | Update every visible outdated package |
 | `r` | Rescan everything (bypass cache) |
@@ -40,11 +51,24 @@ uv run pkgstate scan --json
 
 Filter examples: `rich` · `pip rich` · `:outdated` · `:m=npm :outdated` · `:m=pip rich` · `:s=unknown`. See [docs/filter-language.md](docs/filter-language.md).
 
-Updates run the underlying package manager command (e.g. `sudo dnf upgrade <pkg>`, `brew upgrade <pkg>`). You'll be prompted before anything is executed; sudo prompts surface in the same terminal.
+Updates run the underlying package manager command as argv (no shell), for example `sudo dnf upgrade <pkg>` or `brew upgrade <pkg>`. You'll be prompted before anything is executed; sudo prompts surface in the same terminal.
+
+## CLI examples
+
+```sh
+bun run src/cli.ts scan --no-check-updates
+bun run src/cli.ts scan --manager npm,pnpm --outdated
+bun run src/cli.ts scan --json --filter ':m=pip :outdated'
+bun run src/cli.ts cache show
+bun run src/cli.ts daemon --once
+bun run src/cli.ts web --port 4321
+bun run src/cli.ts vulns
+bun run src/cli.ts diff
+```
 
 ## Cache
 
-Latest-version lookups are cached at `~/.cache/pkgstate/cache.json` with **stale-while-revalidate**: fresh for 1 h, returned-stale-and-refreshed-in-background for 7 days, refetched after that. Press `r` in the TUI or run `pkgstate scan --refresh` to force a full refresh. See [docs/caching.md](docs/caching.md).
+Latest-version lookups are cached at `~/.cache/pkgstate/cache.json` with **stale-while-revalidate**: registry lookups are fresh for 1 h and usable stale for 7 days; whole-adapter scan results are fresh for 15 min and usable stale for 2 h. Press `r` in the TUI or run `pkgstate scan --refresh` to force a refresh. See [docs/caching.md](docs/caching.md).
 
 ## Docs
 
