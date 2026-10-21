@@ -1,11 +1,13 @@
 #!/usr/bin/env bun
+import pkgJson from "../package.json" with { type: "json" };
 import { stats as cacheStats, clear as clearCache, flush, prune as pruneCache } from "./cache";
 import { runDaemon } from "./daemon";
 import { diffScans } from "./diff";
+import { applyFilter, parseFilter } from "./filter";
 import { scan } from "./scanner";
 import { listArchives } from "./snapshot";
 import { runTui } from "./tui";
-import { queryAll } from "./vuln";
+import { queryAll, vulnKey } from "./vuln";
 import { runWeb } from "./web";
 
 function formatBytes(n: number): string {
@@ -28,19 +30,105 @@ function formatMs(ms: number | null): string {
 const args = process.argv.slice(2);
 const cmd = args[0];
 
+// `pkgstate scan | head` closes the pipe early; that's not an error.
+process.stdout.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EPIPE") process.exit(0);
+  throw err;
+});
+
+function usage(message: string): never {
+  process.stderr.write(`${message}\n\n`);
+  printHelp(process.stderr);
+  process.exit(2);
+}
+
+function valueAfter(flag: string): string | undefined {
+  const idx = args.indexOf(flag);
+  return idx >= 0 ? args[idx + 1] : undefined;
+}
+
+function readManagers(): string[] | undefined {
+  const values: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] !== "--manager") continue;
+    const value = args[i + 1];
+    if (!value || value.startsWith("--")) usage("--manager requires a manager name");
+    values.push(
+      ...value
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
+    );
+    i++;
+  }
+  return values.length ? values : undefined;
+}
+
+function readPositiveInt(flag: string, fallback: number): number {
+  const raw = valueAfter(flag);
+  if (raw === undefined) return fallback;
+  if (raw.startsWith("--")) usage(`${flag} requires a number`);
+  if (!/^\d+$/.test(raw)) usage(`${flag} requires a positive number`);
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n <= 0) usage(`${flag} requires a positive number`);
+  return n;
+}
+
+function assertKnownFlags(known: Set<string>) {
+  for (let i = 1; i < args.length; i++) {
+    const arg = args[i]!;
+    if (!arg.startsWith("--")) continue;
+    if (!known.has(arg)) usage(`unknown option for ${cmd}: ${arg}`);
+    if (
+      arg === "--manager" ||
+      arg === "--filter" ||
+      arg === "--port" ||
+      arg === "--interval" ||
+      arg === "--host"
+    )
+      i++;
+  }
+}
+
 async function main() {
+  if (cmd === "--version" || cmd === "-v" || cmd === "version") {
+    process.stdout.write(`pkgstate ${(pkgJson as { version: string }).version}\n`);
+    return;
+  }
+
   if (!cmd || cmd === "tui") {
+    assertKnownFlags(new Set(["--refresh"]));
     await runTui({ refresh: args.includes("--refresh") });
     return;
   }
 
   if (cmd === "scan") {
+    assertKnownFlags(
+      new Set([
+        "--json",
+        "--refresh",
+        "--check-updates",
+        "--no-check-updates",
+        "--manager",
+        "--filter",
+        "--outdated",
+      ]),
+    );
     const json = args.includes("--json");
     const refresh = args.includes("--refresh");
-    const checkUpdates = args.includes("--check-updates");
+    if (args.includes("--check-updates") && args.includes("--no-check-updates")) {
+      usage("choose either --check-updates or --no-check-updates, not both");
+    }
+    const checkUpdates = !args.includes("--no-check-updates");
+    const managers = readManagers();
+    const filterText = valueAfter("--filter");
+    if (args.includes("--filter") && (filterText === undefined || filterText.startsWith("--"))) {
+      usage("--filter requires a filter expression");
+    }
     const result = await scan({
       refresh,
       checkUpdates,
+      managers,
       awaitBackground: true,
       onProgress: json
         ? undefined
@@ -50,9 +138,26 @@ async function main() {
             else process.stderr.write(`  ${e.manager}: error — ${e.error}\n`);
           },
     });
+    const scanned = Object.keys(result.perManager);
+    const failedManagers = scanned.filter((m) => result.perManager[m]?.error);
+    if (managers) {
+      const unavailable = managers.filter(
+        (m) => !scanned.some((s) => s.toLowerCase() === m.toLowerCase()),
+      );
+      if (unavailable.length > 0) {
+        process.stderr.write(
+          `pkgstate: not scanned (unknown, disabled, or not installed): ${unavailable.join(", ")}\n`,
+        );
+      }
+    }
+    if (scanned.length > 0 && failedManagers.length === scanned.length) process.exitCode = 1;
+    let packages = result.packages;
+    if (args.includes("--outdated")) packages = packages.filter((p) => p.status === "outdated");
+    if (filterText) packages = applyFilter(parseFilter(filterText), packages).map((h) => h.pkg);
+    const shownResult = packages === result.packages ? result : { ...result, packages };
 
     if (json) {
-      process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+      process.stdout.write(JSON.stringify(shownResult, null, 2) + "\n");
       return;
     }
 
@@ -63,9 +168,11 @@ async function main() {
       );
     }
     // Print outdated as a simple table
-    const outdated = result.packages.filter((p) => p.status === "outdated");
+    const outdated = packages.filter((p) => p.status === "outdated");
     if (outdated.length === 0) {
-      process.stdout.write("\nEverything is up to date.\n");
+      process.stdout.write(
+        packages.length === 0 ? "\nNo packages matched.\n" : "\nEverything is up to date.\n",
+      );
       return;
     }
     process.stdout.write(
@@ -80,6 +187,7 @@ async function main() {
   }
 
   if (cmd === "cache") {
+    assertKnownFlags(new Set());
     const sub = args[1] ?? "show";
     if (sub === "show" || sub === "stats") {
       const s = await cacheStats();
@@ -108,44 +216,77 @@ async function main() {
   }
 
   if (cmd === "daemon") {
-    const intervalIdx = args.indexOf("--interval");
-    const intervalMin =
-      intervalIdx >= 0 && args[intervalIdx + 1] ? Number.parseInt(args[intervalIdx + 1]!, 10) : 360;
+    assertKnownFlags(new Set(["--interval", "--once"]));
+    const intervalMin = readPositiveInt("--interval", 360);
     const once = args.includes("--once");
     await runDaemon({ intervalMs: intervalMin * 60_000, once });
     return;
   }
 
   if (cmd === "web") {
-    const portIdx = args.indexOf("--port");
-    const port = portIdx >= 0 && args[portIdx + 1] ? Number.parseInt(args[portIdx + 1]!, 10) : 4321;
-    await runWeb({ port });
+    assertKnownFlags(new Set(["--port", "--host"]));
+    const port = readPositiveInt("--port", 4321);
+    const host = valueAfter("--host");
+    if (args.includes("--host") && (!host || host.startsWith("--")))
+      usage("--host requires an address");
+    await runWeb({ port, host });
     return;
   }
 
   if (cmd === "vulns") {
-    const result = await scan({ awaitBackground: true });
-    process.stderr.write(`Querying OSV.dev for ${result.packages.length} packages…\n`);
-    const map = await queryAll(result.packages);
-    await flush();
-    if (map.size === 0) {
-      process.stdout.write("No known vulnerabilities in installed packages.\n");
-      return;
-    }
-    for (const p of result.packages) {
-      const k = `${p.manager}\x00${p.name}\x00${p.installed}`;
-      const v = map.get(k);
-      if (!v) continue;
-      process.stdout.write(`${p.manager}/${p.name}@${p.installed}\n`);
-      for (const e of v) {
-        process.stdout.write(`  ${e.id}${e.severity ? `  [${e.severity}]` : ""}\n`);
-        if (e.summary) process.stdout.write(`    ${e.summary}\n`);
+    assertKnownFlags(new Set(["--refresh", "--json", "--exit-code"]));
+    const json = args.includes("--json");
+    const result = await scan({ refresh: args.includes("--refresh"), awaitBackground: true });
+    if (!json) process.stderr.write(`Querying OSV.dev for ${result.packages.length} packages…\n`);
+    const report = await queryAll(result.packages);
+    await flush().catch(() => {});
+
+    const affected = result.packages.filter((p) => report.found.has(vulnKey(p)));
+    if (json) {
+      process.stdout.write(
+        `${JSON.stringify(
+          {
+            checked: report.checked,
+            failed: report.failed,
+            vulnerable: affected.map((p) => ({
+              manager: p.manager,
+              name: p.name,
+              installed: p.installed,
+              vulnerabilities: report.found.get(vulnKey(p)),
+            })),
+          },
+          null,
+          2,
+        )}\n`,
+      );
+    } else {
+      if (report.failed > 0) {
+        process.stderr.write(
+          `pkgstate: OSV lookup failed for ${report.failed} of ${report.checked + report.failed} packages (offline?). Results below are incomplete.\n`,
+        );
+      }
+      if (affected.length === 0) {
+        process.stdout.write(
+          report.failed > 0
+            ? "No known vulnerabilities in the packages that could be checked.\n"
+            : `No known vulnerabilities in ${report.checked} checked packages.\n`,
+        );
+      }
+      for (const p of affected) {
+        process.stdout.write(`${p.manager}/${p.name}@${p.installed}\n`);
+        for (const e of report.found.get(vulnKey(p)) ?? []) {
+          process.stdout.write(`  ${e.id}${e.severity ? `  [${e.severity}]` : ""}\n`);
+          if (e.summary) process.stdout.write(`    ${e.summary}\n`);
+        }
       }
     }
+    if (report.failed > 0) process.exitCode = 3;
+    else if (affected.length > 0 && args.includes("--exit-code")) process.exitCode = 1;
     return;
   }
 
   if (cmd === "diff") {
+    assertKnownFlags(new Set());
     const archives = await listArchives();
     if (archives.length < 2) {
       process.stderr.write(
@@ -175,17 +316,17 @@ async function main() {
   }
 
   if (cmd === "help" || cmd === "--help" || cmd === "-h") {
-    printHelp();
+    printHelp(process.stdout);
     return;
   }
 
   process.stderr.write(`unknown command: ${cmd}\n\n`);
-  printHelp();
+  printHelp(process.stderr);
   process.exit(2);
 }
 
-function printHelp() {
-  process.stdout.write(`pkgstate — laptop package state
+function printHelp(stream: Pick<typeof process.stdout, "write"> = process.stdout) {
+  stream.write(`pkgstate — laptop package state
 
 Usage:
   pkgstate                Launch the TUI
@@ -193,20 +334,28 @@ Usage:
   pkgstate scan           Scan and print a summary
   pkgstate scan --json    Scan and emit machine-readable JSON
   pkgstate scan --refresh Bypass the latest-version cache
-  pkgstate scan --check-updates  Hit repo/network metadata (slower; needed for dnf "outdated")
+  pkgstate scan --check-updates     Hit repo/network metadata (default)
+  pkgstate scan --no-check-updates  Installed-only scan; latest/status become unknown
+  pkgstate scan --manager NAME      Only scan one manager (repeat or comma-separate)
+  pkgstate scan --filter EXPR       Apply the same filter language as the TUI
+  pkgstate scan --outdated          Only print/emit outdated packages
   pkgstate cache show     Show cache path, size, and entry stats
   pkgstate cache clear    Empty the on-disk cache
   pkgstate cache prune    Remove dead (past-stale) entries
   pkgstate diff           Diff the two most recent snapshots
   pkgstate vulns          Cross-reference installed packages against OSV.dev
-  pkgstate web [--port N] Serve a small browser UI (default port 4321)
+                          [--json]  [--exit-code: exit 1 if any are vulnerable]
+  pkgstate web            Serve a browser UI on 127.0.0.1
+                          [--port N]  (default 4321)  [--host ADDR]
   pkgstate daemon         Periodic rescans + desktop notifications on new outdated
                           [--interval MIN]  (default 360)  [--once]
+  pkgstate --version      Print the version
   pkgstate help           Show this message
 `);
 }
 
 main().catch((err) => {
-  console.error(err);
+  if (process.env.PKGSTATE_DEBUG) console.error(err);
+  else process.stderr.write(`pkgstate: ${err instanceof Error ? err.message : String(err)}\n`);
   process.exit(1);
 });

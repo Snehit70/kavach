@@ -1,4 +1,4 @@
-import { mkdir, readdir, unlink } from "node:fs/promises";
+import { mkdir, readdir, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ScanResult } from "./scanner";
@@ -37,9 +37,12 @@ export async function saveSnapshot(result: ScanResult): Promise<void> {
     const data: SnapshotFile = { version: SCHEMA_VERSION, savedAt, result };
     const payload = JSON.stringify(data);
 
-    const tmp = `${snapshotPath}.tmp`;
+    const tmp = `${snapshotPath}.${process.pid}.${savedAt}.tmp`;
     await Bun.write(tmp, payload);
-    await Bun.$`mv ${tmp} ${snapshotPath}`.quiet().nothrow();
+    await rename(tmp, snapshotPath).catch(async (err) => {
+      await unlink(tmp).catch(() => {});
+      throw err;
+    });
 
     // Also archive: snapshots/<isoish>.json — rotate to keep only MAX_KEEP.
     const stamp = new Date(savedAt).toISOString().replace(/[:.]/g, "-");

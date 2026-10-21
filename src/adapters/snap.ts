@@ -6,7 +6,7 @@ export const snap: Adapter = {
   async available() {
     return has("snap");
   },
-  async scan() {
+  async scan({ checkUpdates }) {
     const list = await run(["snap", "list"], { timeoutMs: 10_000 });
     if (list.exitCode !== 0) return [];
     const lines = list.stdout.split("\n").slice(1).filter(Boolean);
@@ -17,8 +17,19 @@ export const snap: Adapter = {
       installed.set(cols[0]!, cols[1]!);
     }
 
+    if (!checkUpdates) {
+      return [...installed].map<Package>(([name, version]) => ({
+        manager: "snap",
+        name,
+        installed: version,
+        status: "unknown",
+        updateCmd: ["sudo", "snap", "refresh", name],
+      }));
+    }
+
     const refresh = await run(["snap", "refresh", "--list"], { timeoutMs: 30_000 });
     const outdated = new Map<string, string>();
+    const metadataOk = refresh.exitCode === 0;
     if (refresh.exitCode === 0) {
       for (const line of refresh.stdout.split("\n").slice(1)) {
         const cols = line.trim().split(/\s+/);
@@ -30,6 +41,16 @@ export const snap: Adapter = {
     const out: Package[] = [];
     for (const [name, version] of installed) {
       const latest = outdated.get(name);
+      if (!metadataOk) {
+        out.push({
+          manager: "snap",
+          name,
+          installed: version,
+          status: "unknown",
+          updateCmd: ["sudo", "snap", "refresh", name],
+        });
+        continue;
+      }
       out.push({
         manager: "snap",
         name,

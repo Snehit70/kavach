@@ -6,7 +6,7 @@ export const gem: Adapter = {
   async available() {
     return has("gem");
   },
-  async scan() {
+  async scan({ checkUpdates }) {
     const list = await run(["gem", "list", "--local", "--no-versions"], { timeoutMs: 15_000 });
     if (list.exitCode !== 0) return [];
     // Get versions too.
@@ -17,8 +17,19 @@ export const gem: Adapter = {
       if (m) installed.set(m[1]!, m[2]!.split(",")[0]!.trim());
     }
 
+    if (!checkUpdates) {
+      return [...installed].map<Package>(([name, version]) => ({
+        manager: "gem",
+        name,
+        installed: version,
+        status: "unknown",
+        updateCmd: ["gem", "update", name],
+      }));
+    }
+
     const outRes = await run(["gem", "outdated"], { timeoutMs: 60_000 });
     const outdated = new Map<string, string>();
+    const metadataOk = outRes.exitCode === 0;
     if (outRes.exitCode === 0) {
       for (const line of outRes.stdout.split("\n")) {
         // format: "name (current < latest)"
@@ -30,6 +41,16 @@ export const gem: Adapter = {
     const out: Package[] = [];
     for (const [name, version] of installed) {
       const latest = outdated.get(name);
+      if (!metadataOk) {
+        out.push({
+          manager: "gem",
+          name,
+          installed: version,
+          status: "unknown",
+          updateCmd: ["gem", "update", name],
+        });
+        continue;
+      }
       out.push({
         manager: "gem",
         name,

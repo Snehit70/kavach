@@ -14,7 +14,7 @@ export const bun: Adapter = {
   async available() {
     return has("bun");
   },
-  async scan({ refresh }) {
+  async scan({ refresh, checkUpdates }) {
     const r = await run(["bun", "pm", "ls", "-g"], { timeoutMs: 15_000 });
     if (r.exitCode !== 0) return [];
 
@@ -29,6 +29,16 @@ export const bun: Adapter = {
       const version = trimmed.slice(at + 1);
       if (!name || !version || version.includes("/")) continue;
       installed.push({ name, version });
+    }
+
+    if (!checkUpdates) {
+      return installed.map<Package>((p) => ({
+        manager: "bun",
+        name: p.name,
+        installed: p.version,
+        status: "unknown",
+        updateCmd: ["bun", "install", "-g", `${p.name}@latest`],
+      }));
     }
 
     const out: Package[] = [];

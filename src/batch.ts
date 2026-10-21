@@ -6,6 +6,20 @@ export interface BatchedCommand {
   packages: Package[];
 }
 
+export function validateUpdateCmd(cmd: string[] | undefined): string | null {
+  if (!cmd || cmd.length === 0) return "missing update command";
+  if (cmd.some((part) => part.length === 0 || part.includes("\0") || /[\r\n]/.test(part))) {
+    return "update command contains an empty or invalid argv segment";
+  }
+  const shellBins = new Set(["sh", "bash", "zsh", "fish", "pwsh", "powershell", "cmd.exe"]);
+  const executable = cmd[0]!;
+  const afterSudo = executable === "sudo" ? cmd[1] : executable;
+  if (!afterSudo) return "sudo update command is missing the wrapped executable";
+  if (shellBins.has(afterSudo)) return "update command must be argv, not a shell wrapper";
+  if (cmd.slice(1).includes("sudo")) return "sudo is only allowed as the first argv segment";
+  return null;
+}
+
 /**
  * Group outdated packages by manager and merge into a single command per
  * manager when every package in the group shares the same `updateCmd` prefix
@@ -19,6 +33,7 @@ export function batchUpdates(pkgs: Package[]): BatchedCommand[] {
   const byManager = new Map<string, Package[]>();
   for (const p of pkgs) {
     if (!p.updateCmd) continue;
+    if (validateUpdateCmd(p.updateCmd)) continue;
     const list = byManager.get(p.manager);
     if (list) list.push(p);
     else byManager.set(p.manager, [p]);

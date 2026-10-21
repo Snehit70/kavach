@@ -86,26 +86,58 @@ export interface FilterHit {
 }
 
 /**
+ * Per-package precomputed lookup strings. Stored in a WeakMap so they vanish
+ * when the underlying Package object becomes unreachable (i.e. on rescan).
+ * Avoids re-lowercasing name+manager+status on every keystroke.
+ */
+interface Prepared {
+  haystack: string;
+  managerLower: string;
+}
+const prepCache = new WeakMap<Package, Prepared>();
+function prepare(p: Package): Prepared {
+  let prep = prepCache.get(p);
+  if (!prep) {
+    prep = {
+      haystack: `${p.name} ${p.manager} ${p.status}`,
+      managerLower: p.manager.toLowerCase(),
+    };
+    prepCache.set(p, prep);
+  }
+  return prep;
+}
+
+/**
  * Apply a parsed filter to the package list. Returns matches with their
  * fuzzy positions on the `name` field (other fields are still searched
  * for scoring but the UI only highlights the name column).
  */
 export function applyFilter(filter: ParsedFilter, packages: Package[]): FilterHit[] {
+  const hasStatus = filter.statuses.length > 0;
+  const hasManager = filter.managers.length > 0;
+  const hasTokens = filter.tokens.length > 0;
+
+  // Fast path: no filter at all — skip per-package allocation.
+  if (!hasStatus && !hasManager && !hasTokens) {
+    const hits: FilterHit[] = new Array(packages.length);
+    for (let i = 0; i < packages.length; i++) hits[i] = { pkg: packages[i]!, match: null };
+    return hits;
+  }
+
   const hits: FilterHit[] = [];
-
   for (const p of packages) {
-    if (filter.statuses.length && !filter.statuses.includes(p.status)) continue;
-    if (filter.managers.length && !filter.managers.includes(p.manager.toLowerCase())) continue;
+    if (hasStatus && !filter.statuses.includes(p.status)) continue;
+    if (hasManager) {
+      const ml = prepare(p).managerLower;
+      if (!filter.managers.includes(ml)) continue;
+    }
 
-    if (filter.tokens.length === 0) {
+    if (!hasTokens) {
       hits.push({ pkg: p, match: null });
       continue;
     }
 
-    // Match each token against the haystack name+manager+status, but
-    // record name-only positions for highlighting.
-    const haystack = `${p.name} ${p.manager} ${p.status}`;
-    const haystackMatch = fuzzyMatchAll(filter.tokens, haystack);
+    const haystackMatch = fuzzyMatchAll(filter.tokens, prepare(p).haystack);
     if (!haystackMatch) continue;
 
     const nameMatch = fuzzyMatchAll(filter.tokens, p.name);
@@ -115,9 +147,7 @@ export function applyFilter(filter: ParsedFilter, packages: Package[]): FilterHi
     });
   }
 
-  // If there were fuzzy tokens, sort by score desc; otherwise leave
-  // input order (already outdated-first from the scanner).
-  if (filter.tokens.length > 0) {
+  if (hasTokens) {
     hits.sort((a, b) => (b.match?.score ?? 0) - (a.match?.score ?? 0));
   }
   return hits;

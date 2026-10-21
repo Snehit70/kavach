@@ -15,7 +15,7 @@ export const go: Adapter = {
   async available() {
     return has("go");
   },
-  async scan({ refresh }) {
+  async scan({ refresh, checkUpdates }) {
     const env = await run(["go", "env", "GOBIN", "GOPATH"], { timeoutMs: 5_000 });
     const [gobin, gopath] = env.stdout.split("\n").map((s) => s.trim());
     const binDir = gobin || (gopath ? join(gopath, "bin") : "");
@@ -46,6 +46,18 @@ export const go: Adapter = {
           }
         }
         if (!modulePath) return;
+
+        if (!checkUpdates) {
+          packages.push({
+            manager: "go",
+            name: bin,
+            installed: version || "?",
+            status: "unknown",
+            updateCmd: ["go", "install", `${modulePath}@latest`],
+            extra: { modulePath, binPath: path },
+          });
+          return;
+        }
 
         const latest = await memoize(
           `go:${modulePath}`,

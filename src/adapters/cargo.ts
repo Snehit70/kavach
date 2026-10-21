@@ -13,7 +13,7 @@ export const cargo: Adapter = {
   async available() {
     return has("cargo");
   },
-  async scan({ refresh }) {
+  async scan({ refresh, checkUpdates }) {
     const list = await run(["cargo", "install", "--list"], { timeoutMs: 15_000 });
     if (list.exitCode !== 0) return [];
 
@@ -23,6 +23,16 @@ export const cargo: Adapter = {
       if (!line || line.startsWith(" ") || line.startsWith("\t")) continue;
       const match = line.match(/^(\S+) v(\S+):/);
       if (match) installed.push({ name: match[1]!, version: match[2]! });
+    }
+
+    if (!checkUpdates) {
+      return installed.map<Package>((c) => ({
+        manager: "cargo",
+        name: c.name,
+        installed: c.version,
+        status: "unknown",
+        updateCmd: ["cargo", "install", "--force", c.name],
+      }));
     }
 
     const out: Package[] = [];

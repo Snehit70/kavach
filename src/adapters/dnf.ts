@@ -42,6 +42,12 @@ export const dnf: Adapter = {
           const name = dot > 0 ? nameArch.slice(0, dot) : nameArch;
           outdated.set(name, version);
         }
+      } else {
+        throw new Error(
+          `dnf check-update failed with exit ${upd.exitCode}: ${(
+            upd.stderr.trim() || upd.stdout.trim() || "no output"
+          ).slice(0, 300)}`,
+        );
       }
     }
 

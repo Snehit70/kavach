@@ -6,7 +6,7 @@ export const npm: Adapter = {
   async available() {
     return has("npm");
   },
-  async scan() {
+  async scan({ checkUpdates }) {
     const list = await run(["npm", "ls", "-g", "--depth=0", "--json"], { timeoutMs: 30_000 });
     let installed: Record<string, { version?: string }> = {};
     try {
@@ -16,12 +16,24 @@ export const npm: Adapter = {
       installed = {};
     }
 
+    if (!checkUpdates) {
+      return Object.entries(installed).map<Package>(([name, info]) => ({
+        manager: "npm",
+        name,
+        installed: info.version ?? "?",
+        status: "unknown",
+        updateCmd: ["npm", "install", "-g", `${name}@latest`],
+      }));
+    }
+
     const out = await run(["npm", "outdated", "-g", "--json"], { timeoutMs: 60_000 });
     let outdated: Record<string, { current?: string; latest?: string }> = {};
+    let metadataOk = out.exitCode === 0 || !!out.stdout.trim();
     if (out.stdout.trim()) {
       try {
         outdated = JSON.parse(out.stdout);
       } catch {
+        metadataOk = false;
         outdated = {};
       }
     }
@@ -31,6 +43,15 @@ export const npm: Adapter = {
       const latest = info2?.latest;
       const current = info.version ?? info2?.current ?? "?";
       const isOutdated = !!latest && latest !== current;
+      if (!metadataOk) {
+        return {
+          manager: "npm",
+          name,
+          installed: current,
+          status: "unknown",
+          updateCmd: ["npm", "install", "-g", `${name}@latest`],
+        };
+      }
       return {
         manager: "npm",
         name,

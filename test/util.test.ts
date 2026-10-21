@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { cmpVersions } from "../src/util";
+import { bumpSeverity, cmpVersions } from "../src/util";
 
 describe("cmpVersions", () => {
   const cases: Array<[string, string, number]> = [
@@ -20,11 +20,16 @@ describe("cmpVersions", () => {
     ["6.6.0", "6.6.1", -1],
     ["6.19.6-200.fc43", "6.19.6-200.fc44", -1],
 
-    // pre-release / build suffixes — segments missing in one side
-    // KNOWN ISSUE: current cmpVersions treats shorter as "less", so 1.0.0 < 1.0.0-rc.1
-    // by our rule (semver says the opposite). Documenting current behaviour:
-    ["1.0.0", "1.0.0-rc.1", -1],
+    // pre-releases sort before the release they precede (semver)
+    ["1.0.0-rc.1", "1.0.0", -1],
+    ["1.0.0", "1.0.0-rc.1", 1],
     ["1.0.0-alpha", "1.0.0-beta", -1],
+    ["1.0.0-rc.1", "1.0.0-rc.2", -1],
+    ["1.0.0-rc.2", "1.0.1", -1],
+    ["2.0.0-beta.1", "1.9.9", 1],
+    ["7.0.0-dev.20260421.2", "7.0.0", -1],
+    ["1.0.0rc1", "1.0.0", -1], // PEP 440 style
+    ["1.0.0", "1.0.0.1", -1], // extra numeric segment is newer
 
     // mixed numeric/string segments
     ["1.0a", "1.0b", -1],
@@ -44,6 +49,17 @@ describe("cmpVersions", () => {
     expect(cmpVersions(undefined, "1.0")).toBe(0);
     expect(cmpVersions("1.0", undefined)).toBe(0);
     expect(cmpVersions(undefined, undefined)).toBe(0);
+  });
+
+  test("bumpSeverity classifies semver bumps", () => {
+    expect(bumpSeverity("1.2.3", "2.0.0")).toBe("major");
+    expect(bumpSeverity("1.2.3", "1.3.0")).toBe("minor");
+    expect(bumpSeverity("1.2.3", "1.2.4")).toBe("patch");
+    expect(bumpSeverity("1.2.3", "1.2.3")).toBe("other");
+    expect(bumpSeverity(undefined, "1.0.0")).toBe("other");
+    expect(bumpSeverity("1.0", "1.1")).toBe("minor");
+    expect(bumpSeverity("abc", "def")).toBe("other"); // non-numeric → other
+    expect(bumpSeverity("v1.0.0", "v2.0.0")).toBe("major");
   });
 
   test("is antisymmetric", () => {

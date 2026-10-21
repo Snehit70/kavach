@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { batchUpdates } from "../src/batch";
+import { batchUpdates, validateUpdateCmd } from "../src/batch";
 import type { Package } from "../src/types";
 
 const pkg = (manager: string, name: string, updateCmd?: string[]): Package => ({
@@ -18,6 +18,25 @@ describe("batchUpdates", () => {
 
   test("skips packages with no updateCmd", () => {
     expect(batchUpdates([pkg("npm", "x")])).toEqual([]);
+  });
+
+  test("skips malformed or shell-wrapped update commands", () => {
+    const out = batchUpdates([
+      pkg("npm", "empty", []),
+      pkg("npm", "shell", ["sh", "-c", "npm update -g shell"]),
+      pkg("npm", "nested-sudo", ["npm", "sudo", "update"]),
+      pkg("npm", "ok", ["npm", "install", "-g", "ok@latest"]),
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.packages.map((p) => p.name)).toEqual(["ok"]);
+  });
+
+  test("validateUpdateCmd explains rejected command shapes", () => {
+    expect(validateUpdateCmd(undefined)).toContain("missing");
+    expect(validateUpdateCmd(["sudo"])).toContain("wrapped executable");
+    expect(validateUpdateCmd(["bash", "-lc", "x"])).toContain("shell wrapper");
+    expect(validateUpdateCmd(["npm", "install", "\n"])).toContain("invalid argv");
+    expect(validateUpdateCmd(["sudo", "dnf", "upgrade", "vim"])).toBeNull();
   });
 
   test("merges same-prefix commands in one manager into a single call", () => {

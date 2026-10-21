@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { summarize } from "../src/daemon";
+import { escapeAppleScript, summarize } from "../src/daemon";
 import type { ScanResult } from "../src/scanner";
 import type { Package } from "../src/types";
 
@@ -50,5 +50,13 @@ describe("daemon.summarize", () => {
     ]);
     const s = summarize(prev, next);
     expect(s.body).toMatch(/\+2 more/);
+  });
+});
+
+describe("daemon.escapeAppleScript", () => {
+  test("escapes quotes and backslashes so notifications can't break out of the literal", () => {
+    expect(escapeAppleScript('a"b')).toBe('a\\"b');
+    expect(escapeAppleScript("a\\b")).toBe("a\\\\b");
+    expect(escapeAppleScript('\\"')).toBe('\\\\\\"');
   });
 });

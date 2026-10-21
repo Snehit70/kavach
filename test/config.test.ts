@@ -10,7 +10,7 @@ beforeAll(() => {
   process.env.XDG_CONFIG_HOME = tmp;
 });
 
-const { loadConfig, _resetConfig, configFile } = await import("../src/config");
+const { loadConfig, _resetConfig, configFile, parseConfig } = await import("../src/config");
 
 describe("config", () => {
   beforeEach(() => _resetConfig());
@@ -49,5 +49,43 @@ describe("config", () => {
     _resetConfig();
     const c = await loadConfig();
     expect(c.disabled).toEqual(["npm"]);
+  });
+});
+
+describe("parseConfig", () => {
+  test("drops invalid values and reports why", () => {
+    const warnings: string[] = [];
+    const c = parseConfig(
+      [
+        "[adapters]",
+        'disabled = ["npm", 3]',
+        "[cache]",
+        "freshMs = -5",
+        "[http]",
+        'concurrency = "8"',
+      ].join("\n"),
+      (m) => warnings.push(m),
+    );
+    expect(c).toEqual({
+      disabled: ["npm"],
+      adapterFreshMs: undefined,
+      adapterStaleMs: undefined,
+      httpConcurrency: undefined,
+    });
+    expect(warnings).toHaveLength(3);
+    expect(warnings.join("\n")).toContain("cache.freshMs");
+    expect(warnings.join("\n")).toContain("http.concurrency");
+  });
+
+  test("malformed TOML falls back to defaults with a warning", () => {
+    const warnings: string[] = [];
+    expect(parseConfig("[adapters\ndisabled =", (m) => warnings.push(m))).toEqual({ disabled: [] });
+    expect(warnings[0]).toContain("invalid TOML");
+  });
+
+  test("warns when staleMs < freshMs", () => {
+    const warnings: string[] = [];
+    parseConfig("[cache]\nfreshMs = 1000\nstaleMs = 10", (m) => warnings.push(m));
+    expect(warnings[0]).toContain("staleMs");
   });
 });

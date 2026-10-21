@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -76,10 +76,17 @@ function scheduleFlush() {
 export async function flush(): Promise<void> {
   if (!dirty || !mem) return;
   await mkdir(cacheDir, { recursive: true });
-  const tmp = cachePath + ".tmp";
-  await Bun.write(tmp, JSON.stringify(mem, null, 2));
-  await Bun.$`mv ${tmp} ${cachePath}`.quiet().nothrow();
+  // Unique tmp name: the TUI, daemon and CLI can all flush at the same time.
+  const tmp = `${cachePath}.${process.pid}.${Date.now()}.tmp`;
   dirty = false;
+  try {
+    await Bun.write(tmp, JSON.stringify(mem));
+    await rename(tmp, cachePath);
+  } catch (err) {
+    dirty = true;
+    await unlink(tmp).catch(() => {});
+    throw err;
+  }
 }
 
 export async function clear(): Promise<void> {

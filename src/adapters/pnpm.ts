@@ -10,7 +10,7 @@ export const pnpm: Adapter = {
   async available() {
     return has("pnpm");
   },
-  async scan() {
+  async scan({ checkUpdates }) {
     const list = await run(["pnpm", "list", "-g", "--json", "--depth=0"], { timeoutMs: 30_000 });
     let installed: Record<string, string> = {};
     try {
@@ -24,12 +24,24 @@ export const pnpm: Adapter = {
       installed = {};
     }
 
+    if (!checkUpdates) {
+      return Object.entries(installed).map<Package>(([name, current]) => ({
+        manager: "pnpm",
+        name,
+        installed: current,
+        status: "unknown",
+        updateCmd: ["pnpm", "add", "-g", `${name}@latest`],
+      }));
+    }
+
     const outRes = await run(["pnpm", "outdated", "-g", "--format=json"], { timeoutMs: 60_000 });
     let outdated: Record<string, { current?: string; latest?: string }> = {};
+    let metadataOk = outRes.exitCode === 0 || !!outRes.stdout.trim();
     if (outRes.stdout.trim()) {
       try {
         outdated = JSON.parse(outRes.stdout);
       } catch {
+        metadataOk = false;
         outdated = {};
       }
     }
@@ -37,6 +49,15 @@ export const pnpm: Adapter = {
     return Object.entries(installed).map<Package>(([name, current]) => {
       const latest = outdated[name]?.latest;
       const isOutdated = !!latest && latest !== current;
+      if (!metadataOk) {
+        return {
+          manager: "pnpm",
+          name,
+          installed: current,
+          status: "unknown",
+          updateCmd: ["pnpm", "add", "-g", `${name}@latest`],
+        };
+      }
       return {
         manager: "pnpm",
         name,

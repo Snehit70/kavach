@@ -1,18 +1,24 @@
 import { diffScans } from "./diff";
 import { type ScanResult, scan } from "./scanner";
+import { loadSnapshot } from "./snapshot";
 import { has, run } from "./util";
 
 const DEFAULT_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6h
 
+/** Escape a string for use inside an AppleScript double-quoted literal. */
+export function escapeAppleScript(text: string): string {
+  return text.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
 async function notify(title: string, body: string): Promise<void> {
   // Linux: notify-send  |  macOS: osascript display notification.
   if (await has("notify-send")) {
-    await run(["notify-send", title, body], { timeoutMs: 5_000 });
+    await run(["notify-send", "-a", "pkgstate", "--", title, body], { timeoutMs: 5_000 });
     return;
   }
   if (await has("osascript")) {
-    const safeTitle = title.replace(/"/g, '\\"');
-    const safeBody = body.replace(/"/g, '\\"');
+    const safeTitle = escapeAppleScript(title);
+    const safeBody = escapeAppleScript(body);
     await run(["osascript", "-e", `display notification "${safeBody}" with title "${safeTitle}"`], {
       timeoutMs: 5_000,
     });
@@ -55,10 +61,18 @@ export function summarize(
 
 export async function runDaemon(opts: { intervalMs?: number; once?: boolean } = {}): Promise<void> {
   const interval = opts.intervalMs ?? DEFAULT_INTERVAL_MS;
-  let prev: ScanResult | null = null;
+  // Seed from the last saved scan so a restart doesn't re-announce everything
+  // that was already outdated before the daemon went down.
+  let prev: ScanResult | null = (await loadSnapshot())?.result ?? null;
+  let running = false;
   const tick = async () => {
+    if (running) return; // a slow scan must not overlap the next tick
+    running = true;
     try {
       const next = await scan({ refresh: false, awaitBackground: true });
+      const failed = Object.entries(next.perManager).filter(([, v]) => v.error);
+      for (const [m, v] of failed)
+        process.stderr.write(`pkgstate daemon: ${m} failed: ${v.error}\n`);
       const msg = summarize(prev, next);
       // Only notify when something changed (or first run with outdated > 0).
       const shouldNotify = prev
@@ -68,6 +82,8 @@ export async function runDaemon(opts: { intervalMs?: number; once?: boolean } = 
       prev = next;
     } catch (err) {
       process.stderr.write(`pkgstate daemon: scan failed: ${err}\n`);
+    } finally {
+      running = false;
     }
   };
 
@@ -76,7 +92,14 @@ export async function runDaemon(opts: { intervalMs?: number; once?: boolean } = 
   process.stdout.write(
     `pkgstate daemon: scanning every ${Math.round(interval / 60_000)} minutes\n`,
   );
-  // Use setInterval and keep the process alive.
-  setInterval(tick, interval);
-  await new Promise<void>(() => {});
+  const timer = setInterval(tick, interval);
+  await new Promise<void>((resolve) => {
+    const stop = () => {
+      clearInterval(timer);
+      resolve();
+    };
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
+  });
+  process.stdout.write("pkgstate daemon: stopped\n");
 }
