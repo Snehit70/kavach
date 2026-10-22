@@ -13,7 +13,7 @@ const pkgs: Package[] = [
 describe("parseFilter", () => {
   test("empty input", () => {
     const f = parseFilter("");
-    expect(f).toEqual({ tokens: [], statuses: [], managers: [], raw: "" });
+    expect(f).toEqual({ tokens: [], statuses: [], managers: [], bumps: [], raw: "" });
   });
 
   test("bare fuzzy tokens", () => {
@@ -90,6 +90,12 @@ describe("applyFilter", () => {
     expect(out[0]!.pkg.name).toBe("rich");
   });
 
+  test("parses bump scopes", () => {
+    expect(parseFilter(":major :minor").bumps).toEqual(["major", "minor"]);
+    expect(parseFilter(":b=PATCH").bumps).toEqual(["patch"]);
+    expect(parseFilter(":bump other rich")).toMatchObject({ bumps: ["other"], tokens: ["rich"] });
+  });
+
   test("fuzzy token matches manager field", () => {
     const out = applyFilter(parseFilter("npm"), pkgs);
     expect(out.length).toBe(2); // both npm packages match via manager
@@ -116,5 +122,13 @@ describe("applyFilter", () => {
   test("non-matching fuzzy returns empty", () => {
     const out = applyFilter(parseFilter("zzzzz"), pkgs);
     expect(out).toEqual([]);
+  });
+
+  test(":major / :b=minor keep outdated rows with that bump", () => {
+    expect(applyFilter(parseFilter(":major"), pkgs).map((h) => h.pkg.name)).toEqual(["rich"]);
+    expect(applyFilter(parseFilter(":b=minor"), pkgs).map((h) => h.pkg.name)).toEqual([
+      "typescript",
+    ]);
+    expect(applyFilter(parseFilter(":bump patch"), pkgs)).toEqual([]);
   });
 });

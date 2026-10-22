@@ -1,5 +1,6 @@
 import { type FuzzyMatch, fuzzyMatchAll } from "./fuzzy";
 import type { Package, Status } from "./types";
+import { type Bump, bumpSeverity } from "./util";
 
 /**
  * A parsed user filter expression.
@@ -9,6 +10,8 @@ import type { Package, Status } from "./types";
  *   ":m=pip rich"     → manager = "pip" AND fuzzy "rich"
  *   ":manager npm"    → manager = "npm" (the next bare token is consumed)
  *   ":status unknown" → status = "unknown"
+ *   ":major"          → outdated with a major version bump (also :minor, :patch)
+ *   ":b=minor"        → same, key=value form (":bump minor" works too)
  *
  * Anything starting with `:` is a scoped clause; everything else is a fuzzy token.
  */
@@ -16,6 +19,8 @@ export interface ParsedFilter {
   tokens: string[];
   statuses: Status[];
   managers: string[];
+  /** Version-bump severities; implies status = outdated. */
+  bumps: Bump[];
   /** Raw user input — kept for display. */
   raw: string;
 }
@@ -28,8 +33,21 @@ const STATUS_WORDS: Record<string, Status> = {
   unknown: "unknown",
 };
 
+const BUMP_WORDS: Record<string, Bump> = {
+  major: "major",
+  minor: "minor",
+  patch: "patch",
+  other: "other",
+};
+
 export function parseFilter(input: string): ParsedFilter {
-  const out: ParsedFilter = { tokens: [], statuses: [], managers: [], raw: input };
+  const out: ParsedFilter = {
+    tokens: [],
+    statuses: [],
+    managers: [],
+    bumps: [],
+    raw: input,
+  };
   const parts = input.trim().split(/\s+/).filter(Boolean);
 
   for (let i = 0; i < parts.length; i++) {
@@ -44,6 +62,11 @@ export function parseFilter(input: string): ParsedFilter {
       out.statuses.push(STATUS_WORDS[body]!);
       continue;
     }
+    // Bare bump shortcut: :major, :minor, :patch (not :other, which reads oddly)
+    if (body !== "other" && BUMP_WORDS[body]) {
+      out.bumps.push(BUMP_WORDS[body]!);
+      continue;
+    }
     // key=value form: :m=pip, :manager=pip, :status=outdated
     let key: string;
     let value: string | undefined;
@@ -55,7 +78,13 @@ export function parseFilter(input: string): ParsedFilter {
       key = body;
     }
 
-    const isKnownKey = key === "m" || key === "manager" || key === "s" || key === "status";
+    const isKnownKey =
+      key === "m" ||
+      key === "manager" ||
+      key === "s" ||
+      key === "status" ||
+      key === "b" ||
+      key === "bump";
     // Only consume the next token as the value for KNOWN keys without an `=`.
     if (isKnownKey && value === undefined) {
       value = parts[i + 1];
@@ -71,6 +100,12 @@ export function parseFilter(input: string): ParsedFilter {
       case "status":
         if (value && STATUS_WORDS[value]) out.statuses.push(STATUS_WORDS[value]!);
         break;
+      case "b":
+      case "bump": {
+        const bump = value ? BUMP_WORDS[value.toLowerCase()] : undefined;
+        if (bump) out.bumps.push(bump);
+        break;
+      }
       default:
         // Unknown command — treat the raw `:xxx` as a fuzzy token so it
         // still narrows the list rather than silently doing nothing.
@@ -93,6 +128,7 @@ export interface FilterHit {
 interface Prepared {
   haystack: string;
   managerLower: string;
+  bump: Bump;
 }
 const prepCache = new WeakMap<Package, Prepared>();
 function prepare(p: Package): Prepared {
@@ -101,10 +137,17 @@ function prepare(p: Package): Prepared {
     prep = {
       haystack: `${p.name} ${p.manager} ${p.status}`,
       managerLower: p.manager.toLowerCase(),
+      bump: p.status === "outdated" ? bumpSeverity(p.installed, p.latest) : "other",
     };
     prepCache.set(p, prep);
   }
   return prep;
+}
+
+/** Bump severity of an outdated package ("other" otherwise), computed once
+ *  per package object. */
+export function packageBump(p: Package): Bump {
+  return prepare(p).bump;
 }
 
 /**
@@ -116,9 +159,10 @@ export function applyFilter(filter: ParsedFilter, packages: Package[]): FilterHi
   const hasStatus = filter.statuses.length > 0;
   const hasManager = filter.managers.length > 0;
   const hasTokens = filter.tokens.length > 0;
+  const hasBump = filter.bumps.length > 0;
 
   // Fast path: no filter at all — skip per-package allocation.
-  if (!hasStatus && !hasManager && !hasTokens) {
+  if (!hasStatus && !hasManager && !hasTokens && !hasBump) {
     const hits: FilterHit[] = new Array(packages.length);
     for (let i = 0; i < packages.length; i++) hits[i] = { pkg: packages[i]!, match: null };
     return hits;
@@ -131,6 +175,7 @@ export function applyFilter(filter: ParsedFilter, packages: Package[]): FilterHi
       const ml = prepare(p).managerLower;
       if (!filter.managers.includes(ml)) continue;
     }
+    if (hasBump && (p.status !== "outdated" || !filter.bumps.includes(packageBump(p)))) continue;
 
     if (!hasTokens) {
       hits.push({ pkg: p, match: null });
