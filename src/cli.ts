@@ -6,7 +6,6 @@ import { diffScans } from "./diff";
 import { applyFilter, parseFilter } from "./filter";
 import { scan } from "./scanner";
 import { listArchives } from "./snapshot";
-import { runTui } from "./tui";
 import { queryAll, vulnKey } from "./vuln";
 import { runWeb } from "./web";
 
@@ -98,6 +97,9 @@ async function main() {
 
   if (!cmd || cmd === "tui") {
     assertKnownFlags(new Set(["--refresh"]));
+    // Loaded lazily: opentui's FFI setup costs ~200ms, which every other
+    // subcommand would otherwise pay at startup.
+    const { runTui } = await import("./tui");
     await runTui({ refresh: args.includes("--refresh") });
     return;
   }

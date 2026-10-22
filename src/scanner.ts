@@ -6,6 +6,8 @@ import { loadPlugins } from "./plugins";
 import { saveSnapshot } from "./snapshot";
 import type { Adapter, Package } from "./types";
 
+const collator = new Intl.Collator(undefined, { numeric: true });
+
 /** Per-process availability cache so we don't spawn `command -v` on every scan. */
 const availability = new Map<string, Promise<boolean>>();
 function isAvailable(a: Adapter): Promise<boolean> {
@@ -139,8 +141,8 @@ export async function scan(opts: ScanOptions = {}): Promise<ScanResult> {
       const sa = statusRank(a.status);
       const sb = statusRank(b.status);
       if (sa !== sb) return sa - sb;
-      if (a.manager !== b.manager) return a.manager.localeCompare(b.manager);
-      return a.name.localeCompare(b.name);
+      if (a.manager !== b.manager) return collator.compare(a.manager, b.manager);
+      return collator.compare(a.name, b.name);
     }),
     perManager,
     totalMs: Math.round(performance.now() - t0),

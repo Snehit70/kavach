@@ -6,6 +6,11 @@ export type SortDir = "asc" | "desc";
 
 const STATUS_RANK = { outdated: 0, unknown: 1, "up-to-date": 2 } as const;
 
+/** One shared collator: `localeCompare` builds a new one per call, which is
+ *  what made sorting a few thousand rows take hundreds of milliseconds. */
+const collator = new Intl.Collator(undefined, { numeric: true });
+const cmpStr = collator.compare;
+
 export const SORT_KEYS: SortKey[] = ["status", "manager", "name", "installed", "latest"];
 
 export function cyclesSortKey(current: SortKey): SortKey {
@@ -27,18 +32,18 @@ function compare(a: Package, b: Package, key: SortKey): number {
     case "status": {
       const r = STATUS_RANK[a.status] - STATUS_RANK[b.status];
       if (r !== 0) return r;
-      const m = a.manager.localeCompare(b.manager);
-      return m !== 0 ? m : a.name.localeCompare(b.name);
+      const m = cmpStr(a.manager, b.manager);
+      return m !== 0 ? m : cmpStr(a.name, b.name);
     }
     case "manager": {
-      const r = a.manager.localeCompare(b.manager);
-      return r !== 0 ? r : a.name.localeCompare(b.name);
+      const r = cmpStr(a.manager, b.manager);
+      return r !== 0 ? r : cmpStr(a.name, b.name);
     }
     case "name":
-      return a.name.localeCompare(b.name);
+      return cmpStr(a.name, b.name);
     case "installed":
-      return cmpVersions(a.installed, b.installed) || a.name.localeCompare(b.name);
+      return cmpVersions(a.installed, b.installed) || cmpStr(a.name, b.name);
     case "latest":
-      return cmpVersions(a.latest, b.latest) || a.name.localeCompare(b.name);
+      return cmpVersions(a.latest, b.latest) || cmpStr(a.name, b.name);
   }
 }

@@ -64,17 +64,36 @@ function splitPrerelease(v: string): { base: string; pre: string } {
   return m ? { base: v.slice(0, m.index), pre: v.slice(m.index) } : { base: v, pre: "" };
 }
 
+interface ParsedVersion {
+  base: (number | string)[];
+  pre: (number | string)[];
+  hasPre: boolean;
+}
+
+/** Parsing dominates sort cost (O(n log n) compares over a few thousand
+ *  strings), so each distinct version string is tokenized once. */
+const parsedVersions = new Map<string, ParsedVersion>();
+function parseVersion(v: string): ParsedVersion {
+  let parsed = parsedVersions.get(v);
+  if (parsed) return parsed;
+  const { base, pre } = splitPrerelease(v);
+  parsed = { base: tokenize(base), pre: tokenize(pre), hasPre: pre !== "" };
+  if (parsedVersions.size > 50_000) parsedVersions.clear();
+  parsedVersions.set(v, parsed);
+  return parsed;
+}
+
 /** Best-effort semver-ish comparison. Returns -1 / 0 / 1. */
 export function cmpVersions(a?: string, b?: string): number {
   if (!a || !b) return 0;
-  const x = splitPrerelease(a);
-  const y = splitPrerelease(b);
-  const base = cmpTokens(tokenize(x.base), tokenize(y.base));
+  const x = parseVersion(a);
+  const y = parseVersion(b);
+  const base = cmpTokens(x.base, y.base);
   if (base !== 0) return base;
   // Same base: a pre-release is older than the release it precedes.
-  if (!x.pre && y.pre) return 1;
-  if (x.pre && !y.pre) return -1;
-  return cmpTokens(tokenize(x.pre), tokenize(y.pre));
+  if (!x.hasPre && y.hasPre) return 1;
+  if (x.hasPre && !y.hasPre) return -1;
+  return cmpTokens(x.pre, y.pre);
 }
 
 function cmpTokens(tokA: (number | string)[], tokB: (number | string)[]): number {
