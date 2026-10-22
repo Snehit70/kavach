@@ -22,7 +22,7 @@ The screen is drawn on a solid background with three surface levels: the header 
 
 - **Header bar**: brand pill, package and manager counts, a stacked health bar (current, patch, minor, major, unknown) with the share of current packages. On the right: an adapter-error pill, scan progress (`3/11` with a bar and the managers still running), or how old the data is.
 - **Table frame**: the top edge holds the view tabs with live counts (`All`, `Outdated`, `Major`, `Minor`, `Patch`, `Unknown`, `Marked`; abbreviated when narrow) and the active ordering. Below it are the filter input with the match count ("12 of 3944"), the column header (the active sort column is highlighted and shows `↑`/`↓`), and one row per package. The scrollbar thumb rides the right edge. The bottom edge shows the marked count and "selected of total".
-- **Rows**: selection bar, mark `✓`, status glyph coloured by bump, name (fuzzy matches underlined), manager (with its own colour and, with Nerd Fonts, its logo), installed `→` latest with the changed part of the version highlighted (`1.2.`**`16`**), and a tinted bump chip.
+- **Rows**: selection bar, mark `✓`, status glyph coloured by bump, name (fuzzy matches underlined), manager (with its own colour and, with Nerd Fonts, its logo; dimmed when it repeats the row above), installed `→` latest with the changed part of the version highlighted (`1.2.`**`16`**), and a tinted bump chip.
 - **Detail** (toggle with `d`): from 130 columns up a framed side panel with the package, versions, the update command, its registry page, extra fields, the marked set, and an overview of every manager (count, outdated share, failures). It takes the width the table can't use (44 columns up to 42% of the screen), measured from the full package set so it doesn't resize while you filter. Below 130 columns it is a framed three-line strip under the table.
 - **Footer bar**: a mode pill (`NORMAL`, `FILTER`, `CONFIRM`, `HELP`, `ERRORS`), key hints that drop off as the terminal narrows, and a toast (`✓` ok, `!` warning, `✗` error) on the right.
 
@@ -30,11 +30,11 @@ Every frame line is built as styled text, one `TextRenderable` per region, so a 
 
 ## Themes, icons and saved settings
 
-`t` cycles three dark themes: `catppuccin` (Mocha, the default), `tokyo-night` and `gruvbox`.
+`t` cycles five dark themes: `midnight` (deep navy, the default), `black` (true black for transparent or OLED terminals), `catppuccin` (Mocha), `tokyo-night` and `gruvbox`.
 
 `I` toggles [Nerd Font](https://www.nerdfonts.com/) glyphs: manager logos, rounded pill caps, and codicon search / check / warning / link icons. On first run pkgstate turns them on if `fc-list` reports any installed Nerd Font. Set `PKGSTATE_ICONS=1` or `0` to force it. Only Basic Multilingual Plane code points are used, so every glyph is one cell wide.
 
-Sort key and direction, grouping, the detail pane, the current view, the theme and the icon setting are saved to `$XDG_STATE_HOME/pkgstate/tui.json` (default `~/.local/state/pkgstate/tui.json`) whenever they change. Invalid values in the file are ignored.
+Sort key and direction, grouping, the detail pane, and the current view are saved to `$XDG_STATE_HOME/pkgstate/tui.json` (default `~/.local/state/pkgstate/tui.json`) whenever they change. The theme and icon setting are saved only once you pick them with `t` / `I`, so a new default theme still reaches you. Invalid values in the file are ignored.
 
 Column widths are computed once per result set from the 95th percentile of name and version lengths, not from the visible rows, so columns don't shift while scrolling. Spare width goes to long names first, then long versions, then the name column, so the grid always meets the right edge. On narrow terminals the versions shrink first (truncated with `…`), then the name; below 72 columns the bump column (`major` / `minor` / `patch`) is hidden.
 

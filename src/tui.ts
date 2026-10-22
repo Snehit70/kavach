@@ -63,6 +63,68 @@ interface Theme {
 
 const THEMES: Theme[] = [
   {
+    // Near-black with a cool tint; status colours tuned to stay readable on it.
+    name: "midnight",
+    base: "#0e1016",
+    mantle: "#08090d",
+    surface0: "#181b24",
+    surface1: "#242936",
+    surface2: "#363c4d",
+    overlay0: "#5c6378",
+    overlay1: "#7d8499",
+    subtext: "#a6adc0",
+    text: "#d6dae6",
+    bright: "#f5f7fc",
+    accent: "#7daeff",
+    accent2: "#c4a7ff",
+    zebra: "#12141c",
+    selBg: "#1c2538",
+    border: "#2e3446",
+    borderFocus: "#3f5f96",
+    grid: "#232836",
+    upToDate: "#86e0a0",
+    unknown: "#6f768b",
+    major: "#ff7a90",
+    minor: "#ffa66b",
+    patch: "#f0d07a",
+    majorBg: "#341a23",
+    minorBg: "#33221a",
+    patchBg: "#2e2919",
+    match: "#f0d07a",
+    managers: ["#7daeff", "#c4a7ff", "#6fd5e8", "#7fdfc3", "#a6b5ff", "#f3a8d8", "#9fc8ff"],
+  },
+  {
+    // Pure black, for terminals that are black already.
+    name: "black",
+    base: "#000000",
+    mantle: "#0b0b0e",
+    surface0: "#15161b",
+    surface1: "#212329",
+    surface2: "#33353d",
+    overlay0: "#5e6170",
+    overlay1: "#80838f",
+    subtext: "#a9abb5",
+    text: "#dcdde3",
+    bright: "#ffffff",
+    accent: "#8ab4f8",
+    accent2: "#c9a8fa",
+    zebra: "#08080a",
+    selBg: "#1a2232",
+    border: "#24262d",
+    borderFocus: "#3d5a8c",
+    grid: "#1e2027",
+    upToDate: "#8bdc9c",
+    unknown: "#6e717d",
+    major: "#ff7b8a",
+    minor: "#ffa96e",
+    patch: "#f2d27e",
+    majorBg: "#2e1419",
+    minorBg: "#2e1d12",
+    patchBg: "#29240f",
+    match: "#f2d27e",
+    managers: ["#8ab4f8", "#c9a8fa", "#70d4e6", "#80dec2", "#a8b6ff", "#f2a9d6", "#a0c8ff"],
+  },
+  {
     name: "catppuccin",
     base: "#1e1e2e",
     mantle: "#181825",
@@ -80,7 +142,7 @@ const THEMES: Theme[] = [
     selBg: "#3a3d55",
     border: "#45475a",
     borderFocus: "#7f9fd8",
-    grid: "#313244",
+    grid: "#3a3c51",
     upToDate: "#a6e3a1",
     unknown: "#7f849c",
     major: "#f38ba8",
@@ -110,7 +172,7 @@ const THEMES: Theme[] = [
     selBg: "#2e3c64",
     border: "#3b4261",
     borderFocus: "#6183c8",
-    grid: "#24283b",
+    grid: "#2f344c",
     upToDate: "#9ece6a",
     unknown: "#737aa2",
     major: "#f7768e",
@@ -140,7 +202,7 @@ const THEMES: Theme[] = [
     selBg: "#45403d",
     border: "#504945",
     borderFocus: "#83a598",
-    grid: "#3c3836",
+    grid: "#45403d",
     upToDate: "#b8bb26",
     unknown: "#928374",
     major: "#fb4934",
@@ -675,6 +737,11 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
 
   const pkgKey = (p: Package): string => `${p.manager}\x00${p.name}`;
 
+  // Theme and icons are saved only once chosen, so a new default theme or a
+  // newly installed Nerd Font still takes effect for everyone else.
+  let savedTheme = prefs.theme;
+  let savedIcons = prefs.icons;
+
   // Saves are chained so two quick changes can't race on the temp file.
   let saveChain: Promise<void> = Promise.resolve();
   const persist = () => {
@@ -684,8 +751,8 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
       groupByManager: state.groupByManager,
       showDetail: state.showDetail,
       view: state.view,
-      theme: T.name,
-      icons,
+      theme: savedTheme,
+      icons: savedIcons,
     };
     saveChain = saveChain.then(() => prefsSaver(next)).catch(() => {});
   };
@@ -1518,10 +1585,13 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
       if (cols.showManager) {
         const icon = managerIcon(p.manager);
         const mcolor = managerColor(p.manager);
+        // A run of rows from one manager reads as a block: only its first
+        // row (and the selected one) carries the full colour.
+        const repeat = !isSel && rowIdx > 0 && hits[i - 1]?.pkg.manager === p.manager;
         line.push(
           sep(bg),
-          chunk(icon ? `${icon} ` : "", mcolor, bg),
-          chunk(pad(p.manager, cols.manager - (icon ? 2 : 0)), mcolor, bg),
+          chunk(icon ? `${icon} ` : "", repeat ? T.overlay0 : mcolor, bg),
+          chunk(pad(p.manager, cols.manager - (icon ? 2 : 0)), repeat ? T.surface2 : mcolor, bg),
         );
       }
       const installed = trunc(p.installed ?? "", cols.version);
@@ -2645,8 +2715,9 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
         T = THEMES[(THEMES.indexOf(T) + 1) % THEMES.length]!;
         cachedManagerColors = null;
         applyTheme();
+        savedTheme = T.name;
         persist();
-        flash(`theme: ${T.name}`);
+        flash(`theme: ${T.name}  (${THEMES.indexOf(T) + 1}/${THEMES.length})`);
         break;
       }
       case "I":
@@ -2654,6 +2725,7 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
         G = icons ? NERD : PLAIN;
         cachedColumns = null;
         cachedFullTableWidth = null;
+        savedIcons = icons;
         persist();
         flash(icons ? "Nerd Font icons on" : "Nerd Font icons off");
         break;

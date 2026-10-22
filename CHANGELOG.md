@@ -19,10 +19,12 @@
 - TUI side panel on terminals 130 columns or wider: full package detail, update command, extra fields, manager stats, and the marked set beside the table.
 - Redesigned TUI: one line per package with aligned columns, a full-width selected row with a `▌` bar, version-bump labels, a scrollbar, match count and sort order beside the filter, scan progress and data age in the header, and a three-line detail pane.
 - TUI visual refresh: solid themed background with layered surfaces, a rounded table frame with column grid lines and zebra rows, view tabs with counts in the frame, a health bar in the header, highlighted version diffs (`1.2.`**`16`**), tinted bump chips, per-manager colours, mode pill and toasts in the footer, and a framed detail panel with the registry link and a per-manager overview.
-- TUI themes (`t`: catppuccin, tokyo-night, gruvbox) and Nerd Font icons (`I`, auto-detected via `fc-list`, `PKGSTATE_ICONS=0/1` to force).
+- TUI themes (`t`: midnight (default), black, catppuccin, tokyo-night, gruvbox) and Nerd Font icons (`I`, auto-detected via `fc-list`, `PKGSTATE_ICONS=0/1` to force).
 - TUI views (`Tab` / `Shift-Tab`, `o`): All, Outdated, Major, Minor, Patch, Unknown, Marked.
 - TUI keys: `[` / `]` jump between managers, `n` / `N` next / previous outdated, `z` centre, `a` mark all in view, `i` invert marks, `w` open the package page, `Y` copies the marked packages' commands. Clicking tabs and column headers works.
 - TUI settings (sort, grouping, detail pane, view, theme, icons) persist in `~/.local/state/pkgstate/tui.json`.
+- Sorting by status orders outdated packages by bump: major, minor, patch, then other (TUI and web UI).
+- TUI: a manager name that repeats the row above is dimmed, so the column reads as groups.
 - TUI: a finished scan reports new updates, upgrades, additions and removals.
 - Filter scopes `:major`, `:minor`, `:patch` and `:b=<bump>`.
 - `scan` warns about managers that were not scanned and exits `1` if every scanned manager failed.
