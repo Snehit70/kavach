@@ -7,7 +7,7 @@ import { join } from "node:path";
 // path at module load time).
 let tmp: string;
 beforeAll(() => {
-  tmp = mkdtempSync(join(tmpdir(), "pkgstate-cache-"));
+  tmp = mkdtempSync(join(tmpdir(), "kavach-cache-"));
   process.env.XDG_CACHE_HOME = tmp;
 });
 

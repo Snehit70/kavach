@@ -30,7 +30,7 @@ describe("run", () => {
   });
 
   test("merges extra env", async () => {
-    const r = await run(["sh", "-c", 'printf %s "$PKGSTATE_T"'], { env: { PKGSTATE_T: "x" } });
+    const r = await run(["sh", "-c", 'printf %s "$KAVACH_T"'], { env: { KAVACH_T: "x" } });
     expect(r.stdout).toBe("x");
   });
 });

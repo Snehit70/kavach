@@ -40,11 +40,11 @@ jobs:
           bun build --compile --minify --sourcemap \
             --target=${{ matrix.target.flag }} \
             src/cli.ts \
-            --outfile=dist/pkgstate-${{ matrix.target.name }}
+            --outfile=dist/kavach-${{ matrix.target.name }}
       - uses: actions/upload-artifact@v4
         with:
-          name: pkgstate-${{ matrix.target.name }}
-          path: dist/pkgstate-${{ matrix.target.name }}
+          name: kavach-${{ matrix.target.name }}
+          path: dist/kavach-${{ matrix.target.name }}
 
   release:
     needs: build
@@ -60,10 +60,10 @@ jobs:
       - name: Generate checksums
         run: |
           cd dist
-          sha256sum pkgstate-* > SHA256SUMS
+          sha256sum kavach-* > SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/pkgstate-*
+            dist/kavach-*
             dist/SHA256SUMS
           generate_release_notes: true

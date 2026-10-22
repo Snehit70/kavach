@@ -1,11 +1,11 @@
 {
-  "name": "pkgstate",
+  "name": "kavach",
   "version": "0.1.0",
   "description": "Laptop package state manager — TUI for inventorying every package across every package manager.",
   "type": "module",
   "private": true,
   "bin": {
-    "pkgstate": "./src/cli.ts"
+    "kavach": "./src/cli.ts"
   },
   "scripts": {
     "start": "bun run src/cli.ts",
@@ -19,8 +19,8 @@
     "bench:tui": "bun bench/tui.ts",
     "bench:sort": "bun bench/sort.ts",
     "check": "bun run typecheck && bun run lint && bun test",
-    "build": "bun build --compile --minify --sourcemap --target=bun-linux-x64 src/cli.ts --outfile=dist/pkgstate",
-    "build:all": "bun build --compile --minify --sourcemap --target=bun-linux-x64 src/cli.ts --outfile=dist/pkgstate-linux-x64 && bun build --compile --minify --sourcemap --target=bun-linux-arm64 src/cli.ts --outfile=dist/pkgstate-linux-arm64 && bun build --compile --minify --sourcemap --target=bun-darwin-x64 src/cli.ts --outfile=dist/pkgstate-darwin-x64 && bun build --compile --minify --sourcemap --target=bun-darwin-arm64 src/cli.ts --outfile=dist/pkgstate-darwin-arm64"
+    "build": "bun build --compile --minify --sourcemap --target=bun-linux-x64 src/cli.ts --outfile=dist/kavach",
+    "build:all": "bun build --compile --minify --sourcemap --target=bun-linux-x64 src/cli.ts --outfile=dist/kavach-linux-x64 && bun build --compile --minify --sourcemap --target=bun-linux-arm64 src/cli.ts --outfile=dist/kavach-linux-arm64 && bun build --compile --minify --sourcemap --target=bun-darwin-x64 src/cli.ts --outfile=dist/kavach-darwin-x64 && bun build --compile --minify --sourcemap --target=bun-darwin-arm64 src/cli.ts --outfile=dist/kavach-darwin-arm64"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.15",

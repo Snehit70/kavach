@@ -137,7 +137,7 @@ See `src/adapters/<name>.ts` for the source.
 |-|-|
 | **Detection** | `cargo` on `PATH`. |
 | **Installed** | `cargo install --list`. Each crate entry is a line like `bat v0.24.0:` followed by indented binary names; we capture the unindented line. |
-| **Latest** | crates.io API: `GET https://crates.io/api/v1/crates/<name>` → `crate.max_stable_version`. Cached in `~/.cache/pkgstate/cache.json` under `cargo:<name>` for 24h. |
+| **Latest** | crates.io API: `GET https://crates.io/api/v1/crates/<name>` → `crate.max_stable_version`. Cached in `~/.cache/kavach/cache.json` under `cargo:<name>` for 24h. |
 | **Status** | `outdated` if registry latest > installed (per `cmpVersions`). `up-to-date` if registry says equal/lower. `unknown` if the registry lookup fails (network down, 404, etc.). |
 | **Update cmd** | `cargo install --force <name>` |
 | **Notes** | A `User-Agent` header is sent on every request; crates.io requires this. |

@@ -79,7 +79,7 @@ export async function scan(opts: ScanOptions = {}): Promise<ScanResult> {
   const plugins =
     opts.plugins ??
     (await loadPlugins((file, err) => {
-      process.stderr.write(`pkgstate: plugin failed (${file}): ${err}\n`);
+      process.stderr.write(`kavach: plugin failed (${file}): ${err}\n`);
     }));
   const requested = opts.managers ? new Set(opts.managers.map((m) => m.toLowerCase())) : null;
   const merged = uniqueAdapters([...(opts.adapters ?? allAdapters), ...plugins]);

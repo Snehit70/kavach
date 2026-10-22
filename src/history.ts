@@ -1,10 +1,8 @@
 import { mkdir } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { appDir } from "./paths";
 
-const stateDir = process.env.XDG_STATE_HOME
-  ? join(process.env.XDG_STATE_HOME, "pkgstate")
-  : join(homedir(), ".local", "state", "pkgstate");
+const stateDir = appDir("state");
 const historyPath = join(stateDir, "filter-history");
 
 const MAX = 200;

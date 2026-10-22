@@ -1,7 +1,7 @@
 import pkgJson from "../package.json" with { type: "json" };
 
 const VERSION = (pkgJson as { version: string }).version;
-export const USER_AGENT = `pkgstate/${VERSION} (+https://github.com/local)`;
+export const USER_AGENT = `kavach/${VERSION} (+https://github.com/local)`;
 
 /** Global cap on concurrent outbound HTTP requests, across all adapters. */
 export const HTTP_CONCURRENCY = 8;
