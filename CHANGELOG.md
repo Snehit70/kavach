@@ -16,11 +16,18 @@
 - `pkgstate --version`.
 - `pkgstate vulns --json`, `--exit-code`, `--refresh`.
 - Redesigned web UI: sortable table, search, status and manager filters with counts, version-bump badges, copy-update-command button, stale-data hint, keyboard shortcuts, light/dark theme, and loading / empty / error states.
+- TUI side panel on terminals 130 columns or wider: full package detail, update command, extra fields, manager stats, and the marked set beside the table.
+- Redesigned TUI: one line per package with aligned columns, a full-width selected row with a `▌` bar, version-bump labels, a scrollbar, match count and sort order beside the filter, scan progress and data age in the header, and a three-line detail pane.
 - `scan` warns about managers that were not scanned and exits `1` if every scanned manager failed.
 
 ### Fixed
 
 - A missing or non-executable binary no longer throws from adapters (reported as exit 127); timed-out children are killed with SIGKILL if they ignore SIGTERM.
+- TUI: pressing `/` no longer inserts a literal `/` into the filter.
+- TUI: the cursor stays on the selected package when re-sorting, regrouping, or when scan results arrive, instead of jumping to whatever package lands at the same row.
+- Every non-TUI command starts about 300 ms faster (`pkgstate --version` 383 ms → 60 ms) because the TUI and opentui are loaded only when needed.
+- TUI: the filter updates on each keystroke without a 60 ms debounce.
+- TUI: much faster. Sorting is about 4x faster (shared collator and memoized version parsing), renders are coalesced, and a cursor move repaints about 2 KB instead of about 8 KB. Keys stay responsive during a scan.
 - TUI: SIGTERM, SIGHUP and crashes restore the terminal; a failing update command can no longer leave the terminal suspended; scan errors no longer write over the screen; the help overlay is no longer clipped on short terminals.
 - Daemon: scans no longer overlap, adapter failures are logged, it stops cleanly on SIGINT / SIGTERM, and AppleScript notifications escape backslashes and quotes.
 

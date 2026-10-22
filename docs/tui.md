@@ -5,31 +5,40 @@ The terminal UI lives in `src/tui.ts` and uses `@opentui/core` directly (no Reac
 ## Layout
 
 ```
-pkgstate  ·  482 packages  ·  17 outdated  ·  pip:9 dnf:3  ·  8421ms sort: status ↑
-/ press / to filter   (fuzzy: "pip rich"   :outdated   :m=npm   :s=unknown)
-┌───────────────────────────────────────────────────────────────────────┐
-│   ·  PACKAGE                         MGR   INSTALLED      → LATEST    │
-│ ▶ ●  rich                            pip   14.2.0         → 15.0.0    │
-│   ·  github.copilot                  vscode 1.301.0                    │
-│   ○  bun-types                       npm   1.2.13                      │
-└───────────────────────────────────────────────────────────────────────┘
-● pip/rich   14.2.0 → 15.0.0 (major)
-$ pip3 install --user --upgrade rich
-scan 219ms  31 packages
-? help   / filter   j/k move   u/U update   r rescan   q quit
+ pkgstate   482 packages   ● 17 outdated   2 unknown                 updated 3m ago
+
+ / filter   pip rich · :outdated · :m=npm · :s=unknown         sort status ↑
+
+    PACKAGE              MANAGER  INSTALLED      LATEST
+▌ ● rich                 pip      14.2.0       → 15.0.0         major  ┃
+  ● typescript           npm      5.4.2        → 5.4.5          patch  │
+  ○ github.copilot       vscode   1.301.0                              │
+  · bun-types            npm      1.2.13         ?                     │
+────────────────────────────────────────────────────────────────────────
+ ● rich  pip   14.2.0 → 15.0.0  major update
+ $ pip3 install --user --upgrade rich                       u run  Y copy
+                                     pip: 31 packages, scanned in 219ms
+ ? help  / filter  j/k move  space mark  u update  r rescan  q quit  1 / 482
 ```
 
-The root is a `BoxRenderable` with `flexDirection: "column"`. Header, filter, detail, and footer have fixed heights; the table grows to fill the rest. The detail pane is intentionally compact so resize behavior stays predictable.
+The root is a `BoxRenderable` with `flexDirection: "column"`:
 
-The package table is virtualized. `state.selected` still indexes the full filtered result set, but each render only builds the visible logical rows for the current terminal height. This keeps large scans responsive and avoids handing thousands of rows to OpenTUI every frame.
+- **Header**: brand and package counts on the left. On the right: the adapter-error count, the scan spinner and progress while scanning, or how old the data is ("updated 3m ago", refreshed every 30 s).
+- **Filter row**: `/` prompt, the input, and on the right the match count ("12 of 482") and the active ordering ("sort status ↑", "by match" while fuzzy-ranking, "by manager" in grouped mode). Narrow terminals get a shorter placeholder.
+- **Table**: a one-line column header and a body with one line per package. The selected row has a `▌` bar and a full-width background. A scrollbar is drawn in the last column.
+- **Detail pane** (toggle with `d`): the selected package, its update command, extra fields, and that manager's package count and scan time (or its error). Below 130 columns it is a three-line strip under the table. From 130 columns up it becomes a side panel to the right of the table, separated by the scrollbar track. The side panel also lists the marked packages. It takes the width the table can't use (42–72 columns), measured from the full package set so it doesn't resize while you filter.
+- **Footer**: key hints that drop off from the right as the terminal narrows, a transient flash message, and "selected / total".
+
+Column widths are computed once per result set from the 95th percentile of name and version lengths, not from the visible rows, so columns don't shift while scrolling. Spare width goes to the name column first, then the versions. On narrow terminals the versions shrink first (truncated with `…`), then the name; below 72 columns the bump column (`major` / `minor` / `patch`) is hidden.
+
+The package table is virtualized. `state.selected` indexes the full filtered result set, but each render only builds the visible rows for the current terminal height, as one `StyledText` written to a single `TextRenderable`. Navigation repaints only the changed lines.
 
 ## Components in play
 
 | Component | Why |
 |-----------|-----|
 | `BoxRenderable` | All containers + the confirm overlay. Provides Yoga layout, borders, titles, padding. |
-| `TextRenderable` | Header summary, footer keymap, overlay body. |
-| `TextTableRenderable` | The package list. Rebuilt on every state change. |
+| `TextRenderable` | Header, filter meta, table header and body, detail pane, footer, overlay bodies. All styled with `StyledText` chunks. |
 | `InputRenderable` | The filter field; fires `INPUT` / `ENTER` events. |
 | `renderer.keyInput` | Global key stream for navigation, sort, update, rescan, quit. |
 
@@ -154,7 +163,9 @@ It returns the matched positions, which the UI uses to highlight matched charact
 
 ## Sorting
 
-`sortKey` cycles through five columns, `sortDir` toggles direction. The header row gets an `↑`/`↓` mark on whichever column is active. Sort is suppressed entirely when fuzzy ranking is in effect — the header reflects this with `sort: fuzzy-rank` in the summary line.
+`sortKey` cycles through five columns, `sortDir` toggles direction. The filter row shows the active key and an `↑`/`↓` direction. Sort is suppressed entirely when fuzzy ranking is in effect, and the filter row shows `by match` instead.
+
+String comparisons share one `Intl.Collator`, and each distinct version string is tokenized once and memoized, so re-sorting a few thousand rows takes about 10 ms.
 
 `status` sort uses a fixed rank (`outdated < unknown < up-to-date`) so outdated rows still bubble up regardless of alphabetical ordering. `installed` and `latest` sorts use a best-effort version comparator (`cmpVersions` in `src/util.ts`).
 
@@ -195,6 +206,17 @@ Scan failures never crash the UI; they show up in the footer flash and in the ad
 `q`, SIGTERM, SIGHUP, uncaught exceptions and unhandled rejections all go through one `shutdown()` that destroys the renderer (leaving the alt screen, restoring cursor and mouse modes) and then exits. Fatal errors print their message to stderr after the terminal is restored, with exit code 1.
 
 Resize events trigger a rerender and the virtualized table clamps `scrollTop`, so the selected row remains visible when the terminal gets shorter or taller.
+
+The cursor follows the selected package, not its row index. Re-sorting, toggling grouping, or scan results arriving for another manager keep the same package selected. Changing the filter moves the cursor to the top match.
+
+## Rendering and performance
+
+- `pkgstate` imports the TUI module lazily. Loading opentui costs about 200 ms (Bun's FFI binds several hundred native symbols), and other subcommands no longer pay it. The snapshot and filter history are read while the renderer starts.
+- The filter isn't debounced. Each keystroke only parses the query and invalidates caches; matching (a few ms over ~4000 packages) runs once in the next render.
+- State changes call `rerender()`, which coalesces into one render per microtask, so a burst of scan progress events or key repeats produces a single frame.
+- Filter, sort, stats, group summaries and column widths are memoized and cleared only by the state changes that affect them.
+- The spinner timer runs only while a scan is active and repaints only the header.
+- `bench/tui.ts` drives the real TUI headlessly against the latest snapshot and prints per-key latency (`W`, `H`, `FRAME=1` and `KEYS` env vars adjust it). `bench/sort.ts` times `sortPackages` per key.
 
 ## Small terminals
 
