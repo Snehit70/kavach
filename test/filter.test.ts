@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { applyFilter, parseFilter } from "../src/filter";
+import type { PackageSecurity } from "../src/security";
 import type { Package } from "../src/types";
 
 const pkgs: Package[] = [
@@ -13,7 +14,14 @@ const pkgs: Package[] = [
 describe("parseFilter", () => {
   test("empty input", () => {
     const f = parseFilter("");
-    expect(f).toEqual({ tokens: [], statuses: [], managers: [], bumps: [], raw: "" });
+    expect(f).toEqual({
+      tokens: [],
+      statuses: [],
+      managers: [],
+      bumps: [],
+      security: [],
+      raw: "",
+    });
   });
 
   test("bare fuzzy tokens", () => {
@@ -130,5 +138,33 @@ describe("applyFilter", () => {
       "typescript",
     ]);
     expect(applyFilter(parseFilter(":bump patch"), pkgs)).toEqual([]);
+  });
+
+  test("security scopes need a report and OR together", () => {
+    const sec = (verdict: PackageSecurity["verdict"], kev = false): PackageSecurity => ({
+      verdict,
+      severity: "high",
+      advisories: [],
+      latestAdvisories: [],
+      reason: "",
+      kev,
+      source: "osv",
+    });
+    const report = new Map<string, PackageSecurity>([
+      ["rich", sec("fix", true)],
+      ["typescript", sec("hold")],
+      ["eslint", sec("nofix")],
+      ["requests", sec("ok")],
+    ]);
+    const of = (p: Package) => report.get(p.name);
+    const names = (q: string) => applyFilter(parseFilter(q), pkgs, of).map((h) => h.pkg.name);
+    expect(parseFilter(":vuln :hold").security).toEqual(["vuln", "hold"]);
+    expect(names(":vuln").sort()).toEqual(["eslint", "rich"]);
+    expect(names(":hold")).toEqual(["typescript"]);
+    expect(names(":kev")).toEqual(["rich"]);
+    expect(names(":nofix")).toEqual(["eslint"]);
+    expect(names(":vuln :hold").sort()).toEqual(["eslint", "rich", "typescript"]);
+    expect(names(":vuln npm")).toEqual(["eslint"]);
+    expect(applyFilter(parseFilter(":vuln"), pkgs)).toEqual([]);
   });
 });

@@ -1,22 +1,28 @@
-// pkgstate web UI. All dynamic content goes through textContent / DOM nodes —
+// kavach web UI. All dynamic content goes through textContent / DOM nodes —
 // package names and versions come from third-party tools and are untrusted.
 (() => {
   "use strict";
 
   const PAGE = 200;
   const STATUS_ORDER = { outdated: 0, unknown: 1, "up-to-date": 2 };
-  const STATUS_LABEL = { all: "All", outdated: "Outdated", "up-to-date": "Up to date", unknown: "Unknown" };
+  const STATUS_LABEL = { all: "All", outdated: "Outdated", "up-to-date": "Up to date", unknown: "Unknown", security: "Security" };
+  const VERDICT_LABEL = { malware: "malicious", fix: "fix available", nofix: "no fix yet", hold: "hold" };
   const COLUMNS = ["status", "manager", "name", "installed", "latest"];
 
   const $ = (id) => document.getElementById(id);
   const els = {
     meta: $("meta"), refresh: $("refresh"), refreshLabel: $("refresh-label"), q: $("q"),
-    status: $("status"), managers: $("managers"), banner: $("banner"), table: $("table"),
+    status: $("status"), managers: $("managers"), banner: $("banner"), secbar: $("secbar"), table: $("table"),
     rows: $("rows"), empty: $("empty"), more: $("more"), toast: $("toast"),
   };
 
   const state = {
     data: null, // { packages, perManager, totalMs, ageMs }
+    sec: null, // /api/security report
+    secRows: new Map(), // manager\0name\0installed -> report row
+    secRank: new Map(),
+    secLoading: false,
+    secError: null,
     loading: true,
     refreshing: false,
     error: null,
@@ -86,6 +92,9 @@
   }
 
   // ---- derived data ---------------------------------------------------------
+  const secKey = (p) => `${p.manager}\0${p.name}\0${p.installed}`;
+  const secOf = (p) => state.secRows.get(secKey(p));
+  const matchesStatus = (p, s) => s === "all" || (s === "security" ? !!secOf(p) : p.status === s);
   function matchesText(p, q) {
     if (!q) return true;
     const hay = `${p.name} ${p.manager}`.toLowerCase();
@@ -97,10 +106,15 @@
     const out = all.filter(
       (p) =>
         matchesText(p, state.q) &&
-        (state.status === "all" || p.status === state.status) &&
+        matchesStatus(p, state.status) &&
         (state.managers.size === 0 || state.managers.has(p.manager)),
     );
+    const byRisk = state.status === "security" && key === "status";
     out.sort((a, b) => {
+      if (byRisk) {
+        const r = (state.secRank.get(secKey(a)) ?? 1e9) - (state.secRank.get(secKey(b)) ?? 1e9);
+        if (r) return r * dir;
+      }
       const primary = key === "status" ? statusRank(a) - statusRank(b) : cmpText(a[key], b[key]);
       return primary * dir || cmpText(a.manager, b.manager) || cmpText(a.name, b.name);
     });
@@ -137,9 +151,9 @@
     const base = all.filter(
       (p) => matchesText(p, state.q) && (state.managers.size === 0 || state.managers.has(p.manager)),
     );
-    const count = (s) => (s === "all" ? base.length : base.filter((p) => p.status === s).length);
+    const count = (s) => base.filter((p) => matchesStatus(p, s)).length;
     els.status.replaceChildren(
-      ...Object.keys(STATUS_LABEL).map((s) =>
+      ...Object.keys(STATUS_LABEL).filter((s) => s !== "security" || state.sec).map((s) =>
         h("button", {
           type: "button", "data-v": s, "aria-pressed": String(state.status === s),
           onclick: () => { state.status = s; state.limit = PAGE; update(); },
@@ -184,6 +198,54 @@
     );
   }
 
+  function renderSecbar() {
+    const r = state.sec;
+    if (!r && !state.secLoading && !state.secError) { els.secbar.hidden = true; return; }
+    els.secbar.hidden = false;
+    if (state.secLoading && !r) {
+      els.secbar.className = "secbar";
+      els.secbar.replaceChildren(h("strong", {}, "Security"), "Checking advisories…");
+      return;
+    }
+    if (state.secError && !r) {
+      els.secbar.className = "secbar warn";
+      els.secbar.replaceChildren(h("strong", {}, "Security"), `Couldn’t check advisories: ${state.secError}`);
+      return;
+    }
+    const c = r.counts;
+    const parts = [
+      [c.malware, "malicious", "critical"], [c.critical, "critical", "critical"], [c.high, "high", "high"],
+      [c.moderate, "moderate", "moderate"], [c.low, "low", "low"], [c.kev, "exploited", "critical"],
+      [c.hold, "hold", "hold"],
+    ].filter(([n]) => n > 0);
+    const worst = c.malware || c.critical || c.kev ? "critical" : c.high ? "high" : c.moderate || c.low ? "moderate" : c.hold ? "hold" : "ok";
+    els.secbar.className = `secbar ${worst}`;
+    const notes = [
+      r.notCovered ? `${r.notCovered} not covered` : null,
+      r.failed ? `${r.failed} lookups failed` : null,
+      `checked ${ago(Date.now() - Date.parse(r.checkedAt))}`,
+    ].filter(Boolean).join(" · ");
+    els.secbar.replaceChildren(
+      h("strong", {}, "Security"),
+      parts.length
+        ? h("span", { class: "counts" }, ...parts.map(([n, label, tone]) => h("span", { class: `sv ${tone}` }, `${n} ${label}`)))
+        : h("span", { class: "sv ok" }, `No known vulnerabilities in ${r.checked} checked`),
+      h("span", { class: "note" }, notes),
+      parts.length > 0 && state.status !== "security"
+        ? h("button", { class: "btn", type: "button", onclick: () => { state.status = "security"; state.limit = PAGE; update(); } }, "Show affected")
+        : null,
+    );
+  }
+
+  function secBadge(p) {
+    const s = secOf(p);
+    if (!s) return null;
+    const tone = s.verdict === "hold" ? "hold" : s.verdict === "malware" ? "critical" : s.severity;
+    const tip = [s.reason, s.target ? `safe target ${s.target}` : "",
+      ...s.advisories.slice(0, 5).map((a) => `${a.id}${a.summary ? `: ${a.summary}` : ""}`)].filter(Boolean).join("\n");
+    return h("span", { class: `secb ${tone}`, title: tip }, `${s.kev ? "exploited · " : ""}${VERDICT_LABEL[s.verdict] || s.verdict}`);
+  }
+
   function copyCell(p) {
     if (!p.updateCmd || !p.updateCmd.length) return h("td", { class: "act" });
     const cmd = p.updateCmd.map(shellQuote).join(" ");
@@ -208,7 +270,7 @@
       return h("tr", {},
         h("td", {}, h("span", { class: `st ${p.status}` }, STATUS_LABEL[p.status] || p.status)),
         h("td", { class: "manager" }, p.manager),
-        h("td", { class: "name", title: p.name }, p.name),
+        h("td", { class: "name", title: p.name }, p.name, secBadge(p)),
         h("td", { class: "mono", title: p.installed }, p.installed || ""),
         h("td", { class: `mono${p.status === "outdated" ? " latest-outdated" : ""}`, title: p.latest || "" },
           p.latest || "", sev ? h("span", { class: `bump ${sev}` }, sev) : null),
@@ -241,6 +303,7 @@
     renderMeta();
     renderControls();
     renderBanner();
+    renderSecbar();
     renderRows();
   }
 
@@ -279,11 +342,32 @@
       if (!res.ok) throw new Error(body.error || `server responded ${res.status}`);
       state.data = body;
       if (refresh) toast("Scan complete");
+      loadSecurity();
     } catch (err) {
       state.error = err instanceof Error ? err.message : String(err);
     } finally {
       state.loading = false;
       state.refreshing = false;
+      update();
+    }
+  }
+
+  async function loadSecurity() {
+    if (state.secLoading) return;
+    state.secLoading = true;
+    state.secError = null;
+    renderSecbar();
+    try {
+      const res = await fetch("/api/security");
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `server responded ${res.status}`);
+      state.sec = body;
+      state.secRows = new Map(body.packages.map((p) => [secKey(p), p]));
+      state.secRank = new Map(body.packages.map((p, i) => [secKey(p), i]));
+    } catch (err) {
+      state.secError = err instanceof Error ? err.message : String(err);
+    } finally {
+      state.secLoading = false;
       update();
     }
   }

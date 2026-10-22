@@ -1,5 +1,8 @@
+import { loadConfig } from "./config";
 import { type ScanResult, scan } from "./scanner";
+import { checkSecurity, reportJson, type SecurityReport } from "./security";
 import { loadSnapshot } from "./snapshot";
+import type { Package } from "./types";
 import appJsAsset from "./web/app.js" with { type: "text" };
 import indexHtmlAsset from "./web/index.html" with { type: "text" };
 import styleCssAsset from "./web/style.css" with { type: "text" };
@@ -35,6 +38,13 @@ export interface WebDeps {
   host: string;
   loadSnapshot: typeof loadSnapshot;
   scan: (opts: { refresh: boolean }) => Promise<ScanResult>;
+  /** Vulnerability check; defaults to OSV/dnf with the configured cooldown. */
+  security?: (packages: Package[]) => Promise<SecurityReport>;
+}
+
+async function defaultSecurity(packages: Package[]): Promise<SecurityReport> {
+  const { cooldownDays } = await loadConfig();
+  return checkSecurity(packages, { cooldownDays });
 }
 
 function hostname(hostHeader: string): string {
@@ -89,6 +99,26 @@ export function createHandler(deps: WebDeps): (req: Request) => Promise<Response
     return inFlight;
   };
 
+  const securityOf = deps.security ?? defaultSecurity;
+  let secInFlight: Promise<Response> | null = null;
+  const security = (): Promise<Response> => {
+    secInFlight ??= (async () => {
+      try {
+        const snap = await deps.loadSnapshot();
+        const packages = snap
+          ? snap.result.packages
+          : (await deps.scan({ refresh: false })).packages;
+        return json(reportJson(await securityOf(packages), packages));
+      } catch (err) {
+        return json({ error: err instanceof Error ? err.message : String(err) }, 500);
+      }
+    })().finally(() => {
+      secInFlight = null;
+    });
+    // Each caller needs its own body stream.
+    return secInFlight.then((r) => r.clone() as Response);
+  };
+
   const payload = (result: ScanResult, ageMs: number) => ({
     packages: result.packages,
     perManager: result.perManager,
@@ -120,6 +150,8 @@ export function createHandler(deps: WebDeps): (req: Request) => Promise<Response
             return json({ error: err instanceof Error ? err.message : String(err) }, 500);
           }
         }
+        case "/api/security":
+          return security();
       }
       return respond("not found\n", { status: 404, type: "text/plain; charset=utf-8" });
     }
@@ -155,14 +187,15 @@ export async function runWeb(opts: { port?: number; host?: string } = {}): Promi
     loadSnapshot,
     scan: ({ refresh }) => scan({ refresh, awaitBackground: true }),
   });
-  const server = Bun.serve({ port, hostname: host, fetch: handler });
+  // A cold scan or vulnerability check can take longer than Bun's 10s default.
+  const server = Bun.serve({ port, hostname: host, idleTimeout: 120, fetch: handler });
   if (host === "0.0.0.0" || host === "::") {
     process.stderr.write(
-      "pkgstate: warning — listening on all interfaces; anyone on your network can read your package inventory.\n",
+      "kavach: warning — listening on all interfaces; anyone on your network can read your package inventory.\n",
     );
   }
   const shown = host.includes(":") ? `[${host}]` : host;
-  process.stdout.write(`pkgstate web on http://${shown}:${server.port}\n`);
+  process.stdout.write(`kavach web on http://${shown}:${server.port}\n`);
   const stop = () => {
     server.stop();
     process.exit(0);

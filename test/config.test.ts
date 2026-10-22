@@ -5,8 +5,8 @@ import { join } from "node:path";
 
 let tmp: string;
 beforeAll(() => {
-  tmp = mkdtempSync(join(tmpdir(), "pkgstate-config-"));
-  mkdirSync(join(tmp, "pkgstate"), { recursive: true });
+  tmp = mkdtempSync(join(tmpdir(), "kavach-config-"));
+  mkdirSync(join(tmp, "kavach"), { recursive: true });
   process.env.XDG_CONFIG_HOME = tmp;
 });
 
@@ -87,5 +87,14 @@ describe("parseConfig", () => {
     const warnings: string[] = [];
     parseConfig("[cache]\nfreshMs = 1000\nstaleMs = 10", (m) => warnings.push(m));
     expect(warnings[0]).toContain("staleMs");
+  });
+
+  test("[security] cooldown_days accepts 0 and rejects negatives", () => {
+    const warnings: string[] = [];
+    expect(parseConfig("[security]\ncooldown_days = 0").cooldownDays).toBe(0);
+    expect(parseConfig("[security]\ncooldown_days = 3.5").cooldownDays).toBe(3.5);
+    const c = parseConfig("[security]\ncooldown_days = -1", (m) => warnings.push(m));
+    expect(c.cooldownDays).toBeUndefined();
+    expect(warnings[0]).toContain("security.cooldown_days");
   });
 });

@@ -1,5 +1,5 @@
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { appDir } from "./paths";
 
 export interface Config {
   /** Adapter names to disable entirely. */
@@ -9,11 +9,12 @@ export interface Config {
   adapterStaleMs?: number;
   /** Cap on concurrent outbound HTTP requests. */
   httpConcurrency?: number;
+  /** Hold upgrades to releases younger than this many days (0 disables). */
+  cooldownDays?: number;
 }
 
 function configPath(): string {
-  const base = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
-  return join(base, "pkgstate", "config.toml");
+  return join(appDir("config"), "config.toml");
 }
 
 let cached: Config | null = null;
@@ -48,6 +49,7 @@ export function parseConfig(text: string, warn: (message: string) => void = () =
   const adapters = section("adapters");
   const cache = section("cache");
   const http = section("http");
+  const security = section("security");
 
   let disabled: string[] = [];
   if (adapters.disabled !== undefined) {
@@ -65,18 +67,25 @@ export function parseConfig(text: string, warn: (message: string) => void = () =
   if (adapterFreshMs && adapterStaleMs && adapterStaleMs < adapterFreshMs) {
     warn("cache.staleMs is smaller than cache.freshMs; stale refresh will never apply");
   }
+  let cooldownDays: number | undefined;
+  if (security.cooldown_days !== undefined) {
+    const v = security.cooldown_days;
+    if (typeof v === "number" && Number.isFinite(v) && v >= 0) cooldownDays = v;
+    else warn(`security.cooldown_days must be 0 or more (got ${JSON.stringify(v)}); ignoring`);
+  }
   return {
     disabled,
     adapterFreshMs,
     adapterStaleMs,
     httpConcurrency: positiveNumber(http.concurrency, "http.concurrency", warn),
+    cooldownDays,
   };
 }
 
 export async function loadConfig(): Promise<Config> {
   if (cached) return cached;
   const path = configPath();
-  const warn = (m: string) => process.stderr.write(`pkgstate: ${path}: ${m}\n`);
+  const warn = (m: string) => process.stderr.write(`kavach: ${path}: ${m}\n`);
   try {
     const file = Bun.file(path);
     cached = (await file.exists()) ? parseConfig(await file.text(), warn) : { disabled: [] };

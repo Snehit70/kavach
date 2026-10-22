@@ -1,10 +1,8 @@
 import { mkdir, rename, unlink } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { appDir } from "./paths";
 
-const cacheDir = process.env.XDG_CACHE_HOME
-  ? join(process.env.XDG_CACHE_HOME, "pkgstate")
-  : join(homedir(), ".cache", "pkgstate");
+const cacheDir = appDir("cache");
 const cachePath = join(cacheDir, "cache.json");
 
 /** Within `FRESH_MS`, return cached value with no I/O. */
@@ -211,6 +209,27 @@ export async function memoizeJson<T>(
     return await fn();
   }
   return JSON.parse(s) as T;
+}
+
+/**
+ * Read a cached JSON value and its age without fetching anything. For
+ * callers that batch many keys into one request and decide freshness
+ * themselves.
+ */
+export async function peekJson<T>(key: string): Promise<{ value: T; ageMs: number } | undefined> {
+  const data = await load();
+  const entry = data.entries[key];
+  if (!entry || entry.value === null) return undefined;
+  try {
+    return { value: JSON.parse(entry.value) as T, ageMs: Date.now() - entry.ts };
+  } catch {
+    return undefined;
+  }
+}
+
+/** Store a JSON value under `key` (see `peekJson`). */
+export async function storeJson(key: string, value: unknown): Promise<void> {
+  await writeEntry(key, JSON.stringify(value));
 }
 
 export interface CacheStats {

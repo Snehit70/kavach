@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ScanResult } from "../src/scanner";
+import { countVerdicts } from "../src/security";
 import { createHandler } from "../src/web";
 
 const result: ScanResult = {
@@ -126,5 +127,62 @@ describe("web handler", () => {
     const { handler } = make();
     expect((await handler(req("/nope"))).status).toBe(404);
     expect((await handler(req("/", { method: "DELETE" }))).status).toBe(405);
+  });
+
+  test("security report lists only packages that need attention, one check at a time", async () => {
+    let checks = 0;
+    const { handler } = make({
+      loadSnapshot: async () => ({ result, ageMs: 0 }),
+      security: async (packages) => {
+        checks++;
+        await new Promise((r) => setTimeout(r, 10));
+        const packagesMap = new Map([
+          [
+            `npm\0${packages[0]!.name}\x001`,
+            {
+              verdict: "fix" as const,
+              severity: "high" as const,
+              advisories: [],
+              latestAdvisories: [],
+              reason: "1 advisory fixed in 2",
+              kev: false,
+              source: "osv" as const,
+            },
+          ],
+        ]);
+        return {
+          checkedAt: 0,
+          packages: packagesMap,
+          counts: countVerdicts(packagesMap),
+          checked: 1,
+          failed: 0,
+          notCovered: 0,
+          errors: [],
+        };
+      },
+    });
+    const [a, b] = await Promise.all([
+      handler(req("/api/security")),
+      handler(req("/api/security")),
+    ]);
+    expect(checks).toBe(1);
+    const body = (await a!.json()) as {
+      counts: { high: number };
+      packages: Array<{ verdict: string }>;
+    };
+    expect(body.counts.high).toBe(1);
+    expect(body.packages.map((p) => p.verdict)).toEqual(["fix"]);
+    expect(((await b!.json()) as { packages: unknown[] }).packages).toHaveLength(1);
+  });
+
+  test("security failures surface as a JSON 500", async () => {
+    const { handler } = make({
+      security: async () => {
+        throw new Error("osv down");
+      },
+    });
+    const res = await handler(req("/api/security"));
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: "osv down" });
   });
 });
