@@ -38,6 +38,45 @@ describe("sortPackages", () => {
     expect(statuses[4]).toBe("up-to-date");
   });
 
+  test("status asc orders outdated rows by bump: major, minor, patch, other", () => {
+    const pkgs = [
+      {
+        manager: "a",
+        name: "rev",
+        installed: "1.0_1",
+        latest: "1.0_2",
+        status: "outdated" as const,
+      },
+      {
+        manager: "a",
+        name: "pat",
+        installed: "1.0.0",
+        latest: "1.0.1",
+        status: "outdated" as const,
+      },
+      {
+        manager: "z",
+        name: "maj",
+        installed: "1.0.0",
+        latest: "2.0.0",
+        status: "outdated" as const,
+      },
+      {
+        manager: "a",
+        name: "min",
+        installed: "1.0.0",
+        latest: "1.1.0",
+        status: "outdated" as const,
+      },
+    ];
+    expect(sortPackages(wrap(pkgs), "status", "asc").map((h) => h.pkg.name)).toEqual([
+      "maj",
+      "min",
+      "pat",
+      "rev",
+    ]);
+  });
+
   test("status desc reverses", () => {
     const out = sortPackages(wrap(sample), "status", "desc");
     expect(out[0]!.pkg.status).toBe("up-to-date");

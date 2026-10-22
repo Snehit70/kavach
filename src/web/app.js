@@ -73,6 +73,12 @@
     if (x[1] !== y[1]) return "minor";
     return x[2] !== y[2] ? "patch" : null;
   }
+  // Most urgent first: outdated by bump size, then unknown, then current.
+  const BUMP_ORDER = { major: 0, minor: 1, patch: 2 };
+  function statusRank(p) {
+    if (p.status !== "outdated") return STATUS_ORDER[p.status] + 3;
+    return BUMP_ORDER[bump(p.installed, p.latest)] ?? 3;
+  }
   const cmpText = (a, b) => (a || "").localeCompare(b || "", undefined, { numeric: true, sensitivity: "base" });
 
   function shellQuote(arg) {
@@ -95,7 +101,7 @@
         (state.managers.size === 0 || state.managers.has(p.manager)),
     );
     out.sort((a, b) => {
-      const primary = key === "status" ? STATUS_ORDER[a.status] - STATUS_ORDER[b.status] : cmpText(a[key], b[key]);
+      const primary = key === "status" ? statusRank(a) - statusRank(b) : cmpText(a[key], b[key]);
       return primary * dir || cmpText(a.manager, b.manager) || cmpText(a.name, b.name);
     });
     return out;

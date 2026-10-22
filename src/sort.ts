@@ -1,10 +1,17 @@
+import { packageBump } from "./filter";
 import type { Package } from "./types";
 import { cmpVersions } from "./util";
 
 export type SortKey = "status" | "manager" | "name" | "installed" | "latest";
 export type SortDir = "asc" | "desc";
 
-const STATUS_RANK = { outdated: 0, unknown: 1, "up-to-date": 2 } as const;
+/** Most urgent first: outdated by bump size, then unknown, then current. */
+const BUMP_RANK = { major: 0, minor: 1, patch: 2, other: 3 } as const;
+const STATUS_RANK = { outdated: 0, unknown: 4, "up-to-date": 5 } as const;
+
+function statusRank(p: Package): number {
+  return p.status === "outdated" ? BUMP_RANK[packageBump(p)] : STATUS_RANK[p.status];
+}
 
 /** One shared collator: `localeCompare` builds a new one per call, which is
  *  what made sorting a few thousand rows take hundreds of milliseconds. */
@@ -30,7 +37,7 @@ export function sortPackages<T extends { pkg: Package }>(
 function compare(a: Package, b: Package, key: SortKey): number {
   switch (key) {
     case "status": {
-      const r = STATUS_RANK[a.status] - STATUS_RANK[b.status];
+      const r = statusRank(a) - statusRank(b);
       if (r !== 0) return r;
       const m = cmpStr(a.manager, b.manager);
       return m !== 0 ? m : cmpStr(a.name, b.name);
