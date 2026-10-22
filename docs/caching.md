@@ -32,9 +32,9 @@ Entries pass through three lifecycle windows:
 
 This is the textbook stale-while-revalidate pattern, scoped per cache key. Registry entries default to 1 h fresh / 7 d stale. Adapter-result entries default to 15 min fresh / 2 h stale.
 
-### Why this matters for pkgstate
+### Why this matters for kavach
 
-Without SWR, a scan with a 1-hour-old cache would block on dozens of HTTP calls. With SWR, the same scan returns instantly using last hour's data, and the network calls drain in the background while you read the UI. The next press of `r` (or the next `pkgstate` invocation) gets fresh data without paying the wait.
+Without SWR, a scan with a 1-hour-old cache would block on dozens of HTTP calls. With SWR, the same scan returns instantly using last hour's data, and the network calls drain in the background while you read the UI. The next press of `r` (or the next `kavach` invocation) gets fresh data without paying the wait.
 
 ### Negative caching
 
@@ -51,7 +51,7 @@ The CLI process exits as soon as `scan` returns, which would orphan in-flight ba
 ## On-disk format
 
 ```
-~/.cache/pkgstate/cache.json
+~/.cache/kavach/cache.json
 ```
 
 Respects `XDG_CACHE_HOME` if set.
@@ -103,7 +103,7 @@ const latest = await memoize(
   `cargo:${name}`,
   async () => {
     const res = await fetch(`https://crates.io/api/v1/crates/${name}`, {
-      headers: { "User-Agent": "pkgstate" },
+      headers: { "User-Agent": "kavach" },
     });
     if (!res.ok) return null;
     const body = await res.json();
@@ -130,13 +130,13 @@ When `latest === null`, adapters should set `status: "unknown"` rather than `"up
 
 - TUI: press `r` to rescan with `refresh: true` (every entry rewritten).
 - CLI: `bun run src/cli.ts scan --refresh`.
-- Nuke it: `rm ~/.cache/pkgstate/cache.json`.
+- Nuke it: `rm ~/.cache/kavach/cache.json`.
 
 ## Concurrency
 
 Within a single process, all reads/writes go through one in-memory `CacheFile`. In-flight requests are deduped via the global `Map`.
 
-Across processes, two `pkgstate` runs racing on the same key issue independent HTTP requests but write atomically — the last writer wins. The window is tiny (200ms debounce + write); in practice it's not worth a lockfile.
+Across processes, two `kavach` runs racing on the same key issue independent HTTP requests but write atomically — the last writer wins. The window is tiny (200ms debounce + write); in practice it's not worth a lockfile.
 
 ## What the cache does *not* store
 

@@ -1,6 +1,6 @@
 import { mkdir, rename } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { appDir, appEnv } from "./paths";
 import { SORT_KEYS, type SortDir, type SortKey } from "./sort";
 import { run } from "./util";
 
@@ -17,9 +17,7 @@ export interface TuiPrefs {
   icons?: boolean;
 }
 
-const stateDir = process.env.XDG_STATE_HOME
-  ? join(process.env.XDG_STATE_HOME, "pkgstate")
-  : join(homedir(), ".local", "state", "pkgstate");
+const stateDir = appDir("state");
 const prefsPath = join(stateDir, "tui.json");
 
 export function parsePrefs(text: string): TuiPrefs {
@@ -62,12 +60,12 @@ export async function savePrefs(prefs: TuiPrefs): Promise<void> {
 }
 
 /**
- * Whether Nerd Font icons are likely to render. PKGSTATE_ICONS=1/0 forces
+ * Whether Nerd Font icons are likely to render. KAVACH_ICONS=1/0 forces
  * it; otherwise any installed Nerd Font counts, since a terminal can't be
  * asked which font it draws with.
  */
 export async function detectNerdFont(): Promise<boolean> {
-  const env = process.env.PKGSTATE_ICONS;
+  const env = appEnv("ICONS");
   if (env === "1" || env === "true") return true;
   if (env === "0" || env === "false") return false;
   const r = await run(["fc-list", ":", "family"], { timeoutMs: 1_000 });

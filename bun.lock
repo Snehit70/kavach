@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "packagestate",
+      "name": "kavach",
       "dependencies": {
         "@opentui/core": "^0.2.6",
       },

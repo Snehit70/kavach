@@ -1,10 +1,10 @@
 # CLI
 
-Entry point: `src/cli.ts`. Dispatched by Bun via `bun run src/cli.ts <args>` or, after `bun link`, the `pkgstate` binary.
+Entry point: `src/cli.ts`. Dispatched by Bun via `bun run src/cli.ts <args>` or, after `bun link`, the `kavach` binary.
 
 ## Commands
 
-### `pkgstate` (no args) / `pkgstate tui`
+### `kavach` (no args) / `kavach tui`
 
 Launches the TUI. See [tui.md](tui.md). Accepts `--refresh` to force the first scan to bypass the latest-version cache.
 
@@ -13,7 +13,7 @@ bun run src/cli.ts
 bun run src/cli.ts tui --refresh
 ```
 
-### `pkgstate scan`
+### `kavach scan`
 
 Runs every available adapter and prints a summary of outdated packages.
 
@@ -69,7 +69,7 @@ bun run src/cli.ts scan --json --filter ':s=unknown'
 
 `--no-check-updates` still discovers installed packages. It only skips the calls that ask package managers or registries for newer versions, so `latest` is usually omitted and `status` is `unknown`.
 
-### `pkgstate cache`
+### `kavach cache`
 
 Inspect or maintain the shared cache:
 
@@ -81,16 +81,16 @@ bun run src/cli.ts cache clear
 
 `show` prints the path, file size, entry count, freshness buckets, and oldest/newest entry ages.
 
-### `pkgstate daemon`
+### `kavach daemon`
 
-Runs periodic scans and sends desktop notifications when new outdated packages appear.
+Runs periodic scans and sends desktop notifications when new outdated packages appear. After each scan it also runs the security check and notifies about *new* malware, exploited (KEV) or critical findings, and about holds caused by a flagged latest release. Findings already announced are remembered in `~/.local/state/kavach/security-seen.json`.
 
 ```sh
 bun run src/cli.ts daemon --once
 bun run src/cli.ts daemon --interval 120
 ```
 
-### `pkgstate web`
+### `kavach web`
 
 Serves the browser UI. Check whether the port is already in use before starting it.
 
@@ -106,30 +106,40 @@ The server only listens on loopback by default. Binding `0.0.0.0` or `::` prints
 - rejects requests whose `Host` header is not `localhost`, `127.0.0.1` or `[::1]` (DNS-rebinding guard);
 - rejects `POST /api/refresh` unless the `Origin` header matches the request host;
 - serves a strict CSP (`default-src 'none'`, same-origin script/style/connect) and builds the DOM without `innerHTML`;
-- collapses concurrent refreshes into a single scan.
+- collapses concurrent refreshes, and concurrent security checks, into a single run.
 
-Endpoints: `GET /`, `GET /api/packages`, `POST /api/refresh`. The first request reads the latest snapshot and falls back to a live scan if there is none.
+Endpoints: `GET /`, `GET /api/packages`, `GET /api/security` (the `vulns --json` report for the current snapshot), `POST /api/refresh`. The first request reads the latest snapshot and falls back to a live scan if there is none.
+
+The page shows a security banner, a Security filter and per-row badges once `/api/security` answers.
 
 Keyboard: `/` focus search, `Esc` clear, `r` rescan. Filter, sort and search state live in the URL hash.
 
-### `pkgstate vulns`
+### `kavach vulns`
 
-Scans installed packages and queries OSV.dev for known vulnerabilities.
+Scans installed packages and gives each one a security verdict: affected and fixable, affected with no fix, or clean but **hold off** on the latest version. Sources are OSV.dev, dnf security advisories, CISA KEV and FIRST EPSS. See [security.md](security.md) for the verdicts and sources.
 
 ```sh
 bun run src/cli.ts vulns
+bun run src/cli.ts vulns --manager pip --verbose
 bun run src/cli.ts vulns --json --exit-code
+bun run src/cli.ts vulns requests@2.19.0      # one package, installed or not
 ```
 
 Flags:
 
 - `--refresh` skips the 24h OSV result cache.
-- `--json` prints `{ vulnerable, failed, checked }` instead of the table.
-- `--exit-code` exits `1` when any vulnerable package is found (for CI/cron).
+- `--verbose` lists every advisory instead of folding long lists.
+- `--manager NAME` limits the report to one manager.
+- `--json` prints `{ checkedAt, checked, failed, notCovered, counts, errors, packages }`. `packages[]` holds only rows that need attention, sorted by risk, each with `verdict`, `severity`, `reason`, `target`, `kev`, `epss`, `advisories` and `latestAdvisories`.
+- `--exit-code` exits `1` when anything installed is affected (for CI/cron).
 
-A failed OSV lookup (offline, HTTP error) is **not** cached as "clean". It is reported on stderr and the command exits `3`.
+`NAME[@VERSION]` looks up a single package. If it is installed, the verdict is printed; otherwise the advisories for that version are listed.
 
-### `pkgstate diff`
+A failed lookup (offline, HTTP error) is **not** cached as "clean". It is reported on stderr and the command exits `3`.
+
+The security verdicts also work as filter scopes in `scan`, for example `kavach scan --filter ':vuln :m=pip'`. See [filter-language.md](filter-language.md).
+
+### `kavach diff`
 
 Diffs the two most recent archived snapshots.
 
@@ -137,17 +147,17 @@ Diffs the two most recent archived snapshots.
 bun run src/cli.ts diff
 ```
 
-### `pkgstate version` / `--version` / `-v`
+### `kavach version` / `--version` / `-v`
 
 Print the version from `package.json`.
 
-### `pkgstate help` / `--help` / `-h`
+### `kavach help` / `--help` / `-h`
 
 Print the help banner.
 
 ## JSON output shape
 
-`pkgstate scan --json` emits a single object:
+`kavach scan --json` emits a single object:
 
 ```json
 {
@@ -181,7 +191,7 @@ Print the help banner.
 | Code | Meaning |
 |------|---------|
 | `0` | Success. (Also returned when there are outdated packages — being outdated is not an error.) |
-| `1` | Uncaught error, every scanned manager failed (`scan`), or vulnerable packages found with `vulns --exit-code`. Message goes to stderr; set `PKGSTATE_DEBUG=1` for a stack trace. |
+| `1` | Uncaught error, every scanned manager failed (`scan`), or vulnerable packages found with `vulns --exit-code`. Message goes to stderr; set `KAVACH_DEBUG=1` for a stack trace. |
 | `2` | Unknown command / bad usage. Help is printed. |
 | `3` | `vulns` could not look up some packages (network/HTTP failure). |
 

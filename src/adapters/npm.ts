@@ -1,5 +1,5 @@
 import type { Adapter, Package } from "../types";
-import { has, run } from "../util";
+import { has, run, runListing } from "../util";
 
 export const npm: Adapter = {
   name: "npm",
@@ -7,7 +7,9 @@ export const npm: Adapter = {
     return has("npm");
   },
   async scan({ checkUpdates }) {
-    const list = await run(["npm", "ls", "-g", "--depth=0", "--json"], { timeoutMs: 30_000 });
+    const list = await runListing(["npm", "ls", "-g", "--depth=0", "--json"], {
+      timeoutMs: 30_000,
+    });
     let installed: Record<string, { version?: string }> = {};
     try {
       const parsed = JSON.parse(list.stdout || "{}");

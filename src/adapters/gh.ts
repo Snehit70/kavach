@@ -1,5 +1,5 @@
 import type { Adapter, Package } from "../types";
-import { has, run } from "../util";
+import { has, runListing } from "../util";
 
 /**
  * gh extensions adapter — `gh extension list` prints columns:
@@ -13,7 +13,7 @@ export const gh: Adapter = {
     return has("gh");
   },
   async scan() {
-    const r = await run(["gh", "extension", "list"], { timeoutMs: 15_000 });
+    const r = await runListing(["gh", "extension", "list"], { timeoutMs: 15_000 });
     if (r.exitCode !== 0) return [];
 
     const out: Package[] = [];

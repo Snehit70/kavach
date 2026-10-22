@@ -1,12 +1,11 @@
 import { readdir } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { appDir } from "./paths";
 import type { Adapter } from "./types";
 
 /** Directory plugins are loaded from. Honors $XDG_CONFIG_HOME. */
 export function pluginsDir(): string {
-  const base = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
-  return join(base, "pkgstate", "adapters");
+  return join(appDir("config"), "adapters");
 }
 
 function isAdapter(x: unknown): x is Adapter {

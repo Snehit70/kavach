@@ -1,4 +1,5 @@
 import { type FuzzyMatch, fuzzyMatchAll } from "./fuzzy";
+import type { PackageSecurity } from "./security";
 import type { Package, Status } from "./types";
 import { type Bump, bumpSeverity } from "./util";
 
@@ -12,6 +13,8 @@ import { type Bump, bumpSeverity } from "./util";
  *   ":status unknown" → status = "unknown"
  *   ":major"          → outdated with a major version bump (also :minor, :patch)
  *   ":b=minor"        → same, key=value form (":bump minor" works too)
+ *   ":vuln"           → installed version has a known advisory
+ *   ":hold" ":kev" ":fix" ":nofix" ":malware" → by security verdict
  *
  * Anything starting with `:` is a scoped clause; everything else is a fuzzy token.
  */
@@ -21,6 +24,8 @@ export interface ParsedFilter {
   managers: string[];
   /** Version-bump severities; implies status = outdated. */
   bumps: Bump[];
+  /** Security scopes; a package matches if any applies. */
+  security: SecurityScope[];
   /** Raw user input — kept for display. */
   raw: string;
 }
@@ -40,12 +45,39 @@ const BUMP_WORDS: Record<string, Bump> = {
   other: "other",
 };
 
+export type SecurityScope = "vuln" | "hold" | "kev" | "fix" | "nofix" | "malware";
+
+const SECURITY_WORDS: Record<string, SecurityScope> = {
+  vuln: "vuln",
+  vulns: "vuln",
+  vulnerable: "vuln",
+  hold: "hold",
+  kev: "kev",
+  exploited: "kev",
+  fix: "fix",
+  nofix: "nofix",
+  malware: "malware",
+};
+
+export function matchesSecurity(scope: SecurityScope, s: PackageSecurity | undefined): boolean {
+  if (!s) return false;
+  switch (scope) {
+    case "vuln":
+      return s.verdict === "malware" || s.verdict === "fix" || s.verdict === "nofix";
+    case "kev":
+      return s.kev;
+    default:
+      return s.verdict === scope;
+  }
+}
+
 export function parseFilter(input: string): ParsedFilter {
   const out: ParsedFilter = {
     tokens: [],
     statuses: [],
     managers: [],
     bumps: [],
+    security: [],
     raw: input,
   };
   const parts = input.trim().split(/\s+/).filter(Boolean);
@@ -65,6 +97,10 @@ export function parseFilter(input: string): ParsedFilter {
     // Bare bump shortcut: :major, :minor, :patch (not :other, which reads oddly)
     if (body !== "other" && BUMP_WORDS[body]) {
       out.bumps.push(BUMP_WORDS[body]!);
+      continue;
+    }
+    if (SECURITY_WORDS[body]) {
+      out.security.push(SECURITY_WORDS[body]!);
       continue;
     }
     // key=value form: :m=pip, :manager=pip, :status=outdated
@@ -153,16 +189,22 @@ export function packageBump(p: Package): Bump {
 /**
  * Apply a parsed filter to the package list. Returns matches with their
  * fuzzy positions on the `name` field (other fields are still searched
- * for scoring but the UI only highlights the name column).
+ * for scoring but the UI only highlights the name column). Security scopes
+ * need `securityOf`; without it they match nothing.
  */
-export function applyFilter(filter: ParsedFilter, packages: Package[]): FilterHit[] {
+export function applyFilter(
+  filter: ParsedFilter,
+  packages: Package[],
+  securityOf?: (p: Package) => PackageSecurity | undefined,
+): FilterHit[] {
   const hasStatus = filter.statuses.length > 0;
   const hasManager = filter.managers.length > 0;
   const hasTokens = filter.tokens.length > 0;
   const hasBump = filter.bumps.length > 0;
+  const hasSecurity = filter.security.length > 0;
 
   // Fast path: no filter at all — skip per-package allocation.
-  if (!hasStatus && !hasManager && !hasTokens && !hasBump) {
+  if (!hasStatus && !hasManager && !hasTokens && !hasBump && !hasSecurity) {
     const hits: FilterHit[] = new Array(packages.length);
     for (let i = 0; i < packages.length; i++) hits[i] = { pkg: packages[i]!, match: null };
     return hits;
@@ -176,6 +218,10 @@ export function applyFilter(filter: ParsedFilter, packages: Package[]): FilterHi
       if (!filter.managers.includes(ml)) continue;
     }
     if (hasBump && (p.status !== "outdated" || !filter.bumps.includes(packageBump(p)))) continue;
+    if (hasSecurity) {
+      const sec = securityOf?.(p);
+      if (!filter.security.some((scope) => matchesSecurity(scope, sec))) continue;
+    }
 
     if (!hasTokens) {
       hits.push({ pkg: p, match: null });

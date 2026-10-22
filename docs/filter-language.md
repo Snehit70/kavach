@@ -1,6 +1,6 @@
 # Filter language
 
-A small expression you type into the `/` filter or pass to `pkgstate scan --filter`. Parsed by `src/filter.ts`.
+A small expression you type into the `/` filter or pass to `kavach scan --filter`. Parsed by `src/filter.ts`.
 
 ## TL;DR
 
@@ -22,6 +22,13 @@ All tokens AND together. Fuzzy tokens are subsequence-matched against `name + ma
 | `:unknown` | status = `unknown` |
 | `:s=<status>` / `:status <status>` | same as the bare status forms |
 | `:m=<manager>` / `:manager <manager>` | manager == this string (case-insensitive) |
+| `:major` / `:minor` / `:patch` | outdated with that version bump |
+| `:b=<bump>` / `:bump <bump>` | same, also accepts `other` |
+| `:vuln` / `:vulns` / `:vulnerable` | installed version has a known advisory (verdict `fix`, `nofix` or `malware`) |
+| `:fix` / `:nofix` / `:hold` / `:malware` | by security verdict, see [security.md](security.md) |
+| `:kev` / `:exploited` | an installed advisory is known to be exploited (CISA KEV) |
+
+Security clauses need a security report. The TUI uses its latest check; `kavach scan --filter` runs one when the filter contains a security clause. Before a report exists they match nothing. Several security clauses OR together, like status clauses.
 
 Unknown `:xxx` clauses fall through to fuzzy — they still narrow the list rather than silently doing nothing.
 
@@ -53,6 +60,8 @@ Returns matched positions for highlighting in the **PACKAGE** column.
 | `:m=pip rich` | pip packages whose name fuzzy-matches "rich". |
 | `:s=unknown` | Entries where latest metadata was skipped or unavailable. |
 | `:m=go aws` | Go binaries fuzzy-matching "aws". |
+| `:vuln :m=pip` | pip packages with a known advisory. |
+| `:hold` | Packages whose latest release you should skip for now. |
 | `bat ripgrep` | Both names — only matches a row that fuzzy-matches *both*, which is rare; usually you want one or the other. |
 
 ## Ranking

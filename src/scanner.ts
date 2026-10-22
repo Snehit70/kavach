@@ -8,7 +8,7 @@ import type { Adapter, Package } from "./types";
 
 const collator = new Intl.Collator(undefined, { numeric: true });
 
-/** Per-process availability cache so we don't spawn `command -v` on every scan. */
+/** Per-process availability cache so adapters probe PATH once per process. */
 const availability = new Map<string, Promise<boolean>>();
 function isAvailable(a: Adapter): Promise<boolean> {
   const cached = availability.get(a.name);
@@ -79,7 +79,7 @@ export async function scan(opts: ScanOptions = {}): Promise<ScanResult> {
   const plugins =
     opts.plugins ??
     (await loadPlugins((file, err) => {
-      process.stderr.write(`pkgstate: plugin failed (${file}): ${err}\n`);
+      process.stderr.write(`kavach: plugin failed (${file}): ${err}\n`);
     }));
   const requested = opts.managers ? new Set(opts.managers.map((m) => m.toLowerCase())) : null;
   const merged = uniqueAdapters([...(opts.adapters ?? allAdapters), ...plugins]);
@@ -108,7 +108,9 @@ export async function scan(opts: ScanOptions = {}): Promise<ScanResult> {
         const pkgs = await memoizeJson<Package[]>(
           cacheKey,
           () => a.scan({ refresh, checkUpdates }),
-          { refresh, freshMs, staleMs },
+          // An empty list is cheap to recompute and is often a listing command
+          // that failed quietly; caching it would hide the manager for minutes.
+          { refresh, freshMs, staleMs, keep: (v) => v !== "[]" },
         );
         const outdated = pkgs.filter((p) => p.status === "outdated").length;
         perManager[a.name] = {

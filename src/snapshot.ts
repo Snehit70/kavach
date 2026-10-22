@@ -1,11 +1,9 @@
 import { mkdir, readdir, rename, unlink } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { appDir } from "./paths";
 import type { ScanResult } from "./scanner";
 
-const cacheDir = process.env.XDG_CACHE_HOME
-  ? join(process.env.XDG_CACHE_HOME, "pkgstate")
-  : join(homedir(), ".cache", "pkgstate");
+const cacheDir = appDir("cache");
 const snapshotPath = join(cacheDir, "snapshot.json");
 const snapshotsDir = join(cacheDir, "snapshots");
 

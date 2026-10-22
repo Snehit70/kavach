@@ -1,12 +1,10 @@
-import { $ } from "bun";
-
+/**
+ * Whether `cmd` is an executable on PATH. Not `command -v` through Bun's shell:
+ * that has no `command` builtin and only worked where /usr/bin/command exists
+ * (Fedora), so every adapter looked unavailable on Debian and Ubuntu.
+ */
 export async function has(cmd: string): Promise<boolean> {
-  try {
-    const r = await $`command -v ${cmd}`.quiet().nothrow();
-    return r.exitCode === 0;
-  } catch {
-    return false;
-  }
+  return Bun.which(cmd, { PATH: process.env.PATH ?? "" }) !== null;
 }
 
 export interface RunResult {
@@ -52,6 +50,18 @@ export async function run(
     if (t) clearTimeout(t);
     if (killTimer) clearTimeout(killTimer);
   }
+}
+
+/**
+ * `run` for the command that lists what a manager has installed. A timeout
+ * throws: an empty listing would read as "nothing installed" and drop that
+ * manager from the scan and the security check without a word.
+ */
+export async function runListing(argv: string[], opts: { timeoutMs: number }): Promise<RunResult> {
+  const r = await run(argv, opts);
+  if (r.exitCode === 124)
+    throw new Error(`${argv.join(" ")} timed out after ${opts.timeoutMs / 1000}s`);
+  return r;
 }
 
 /** Pre-release markers that sort *before* the bare release (semver / PEP 440 style). */

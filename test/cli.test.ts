@@ -40,7 +40,7 @@ describe("cli", () => {
     for (const flag of ["--version", "-v", "version"]) {
       const out = await cli([flag]);
       expect(out.exitCode).toBe(0);
-      expect(out.stdout.trim()).toBe(`pkgstate ${pkg.version}`);
+      expect(out.stdout.trim()).toBe(`kavach ${pkg.version}`);
     }
   });
 

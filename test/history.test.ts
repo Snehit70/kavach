@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 let tmp: string;
 beforeAll(() => {
-  tmp = mkdtempSync(join(tmpdir(), "pkgstate-hist-"));
+  tmp = mkdtempSync(join(tmpdir(), "kavach-hist-"));
   process.env.XDG_STATE_HOME = tmp;
 });
 

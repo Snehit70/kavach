@@ -7,7 +7,7 @@ import { join } from "node:path";
 // path at module load time).
 let tmp: string;
 beforeAll(() => {
-  tmp = mkdtempSync(join(tmpdir(), "pkgstate-cache-"));
+  tmp = mkdtempSync(join(tmpdir(), "kavach-cache-"));
   process.env.XDG_CACHE_HOME = tmp;
 });
 
@@ -97,6 +97,16 @@ describe("cache", () => {
 
     const v3 = await memoize("swr", fetcher, { freshMs: 0, staleMs: 60_000 });
     expect(v3).toBe("call-2");
+  });
+
+  test("keep: a rejected value is returned but not cached", async () => {
+    let calls = 0;
+    const fetcher = async () => (calls++ === 0 ? "" : "full");
+    const keep = (v: string | null) => v !== "";
+    expect(await memoize("keep", fetcher, { keep })).toBe("");
+    expect(await memoize("keep", fetcher, { keep })).toBe("full");
+    expect(await memoize("keep", fetcher, { keep })).toBe("full");
+    expect(calls).toBe(2);
   });
 
   test("dead entry past staleMs blocks on fresh fetch", async () => {

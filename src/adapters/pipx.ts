@@ -1,5 +1,5 @@
 import type { Adapter, Package } from "../types";
-import { has, run } from "../util";
+import { has, runListing } from "../util";
 
 /**
  * pipx adapter — Python apps installed in isolated venvs.
@@ -13,7 +13,7 @@ export const pipx: Adapter = {
     return has("pipx");
   },
   async scan() {
-    const r = await run(["pipx", "list", "--json"], { timeoutMs: 30_000 });
+    const r = await runListing(["pipx", "list", "--json"], { timeoutMs: 30_000 });
     if (r.exitCode !== 0) return [];
     let parsed: {
       venvs?: Record<

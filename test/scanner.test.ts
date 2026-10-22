@@ -128,6 +128,22 @@ describe("scanner", () => {
     expect(result.perManager["partial-bad"]?.error).toContain("metadata command failed");
   });
 
+  test("an empty listing is not cached, so the next scan asks again", async () => {
+    let calls = 0;
+    const flaky: Adapter = {
+      name: "flaky",
+      available: async () => true,
+      // First call stands in for a listing that failed quietly.
+      scan: async () => (calls++ === 0 ? [] : [pkg("flaky", "back")]),
+    };
+    const opts = { adapters: [flaky], plugins: [], config, saveSnapshot: false };
+
+    expect((await scan(opts)).packages).toEqual([]);
+    expect((await scan(opts)).packages.map((p) => p.name)).toEqual(["back"]);
+    expect((await scan(opts)).packages.map((p) => p.name)).toEqual(["back"]);
+    expect(calls).toBe(2);
+  });
+
   test("manager filters limit the scanned adapter set", async () => {
     const scanned: string[] = [];
     const one: Adapter = {

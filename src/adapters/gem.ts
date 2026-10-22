@@ -1,5 +1,5 @@
 import type { Adapter, Package } from "../types";
-import { has, run } from "../util";
+import { has, run, runListing } from "../util";
 
 export const gem: Adapter = {
   name: "gem",
@@ -7,14 +7,24 @@ export const gem: Adapter = {
     return has("gem");
   },
   async scan({ checkUpdates }) {
-    const list = await run(["gem", "list", "--local", "--no-versions"], { timeoutMs: 15_000 });
+    const list = await runListing(["gem", "list", "--local", "--no-versions"], {
+      timeoutMs: 15_000,
+    });
     if (list.exitCode !== 0) return [];
     // Get versions too.
-    const fullList = await run(["gem", "list", "--local"], { timeoutMs: 15_000 });
+    const fullList = await runListing(["gem", "list", "--local"], { timeoutMs: 15_000 });
     const installed = new Map<string, string>();
     for (const line of fullList.stdout.split("\n")) {
       const m = line.match(/^(\S+)\s+\(([^)]+)\)/);
-      if (m) installed.set(m[1]!, m[2]!.split(",")[0]!.trim());
+      // Default gems print as "name (default: 1.2.3)".
+      if (m)
+        installed.set(
+          m[1]!,
+          m[2]!
+            .split(",")[0]!
+            .replace(/^default:\s*/, "")
+            .trim(),
+        );
     }
 
     if (!checkUpdates) {

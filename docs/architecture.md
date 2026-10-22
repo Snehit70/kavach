@@ -7,12 +7,13 @@ src/
 ├── cli.ts          # entry point — dispatches subcommands
 ├── tui.ts          # opentui UI: layout, keymap, render loop
 ├── scanner.ts      # parallel adapter runner, aggregates results
-├── cache.ts        # SWR JSON cache for network lookups (~/.cache/pkgstate/cache.json)
+├── cache.ts        # SWR JSON cache for network lookups (~/.cache/kavach/cache.json)
 ├── batch.ts        # validates and groups argv-shaped update commands
 ├── clipboard.ts    # best-effort terminal clipboard integration
-├── web.ts          # `pkgstate web`: loopback Bun.serve, createHandler() is unit-tested
+├── web.ts          # `kavach web`: loopback Bun.serve, createHandler() is unit-tested
 ├── web/            # index.html, app.js, style.css — embedded into the bundle as text imports
-├── vuln.ts         # OSV.dev lookups; failures throw and are never cached as "clean"
+├── vuln.ts         # advisory feeds: OSV.dev, dnf advisories, CISA KEV, EPSS, publish dates
+├── security.ts     # per-package verdicts (fix/nofix/hold/malware), risk order, reports
 ├── daemon.ts       # periodic scans + desktop notifications
 ├── config.ts       # config.toml parsing/validation (parseConfig)
 ├── fuzzy.ts        # fzf-style scorer with match positions
@@ -129,7 +130,7 @@ interface Adapter {
 ```
 
 - `name` — short id used in the UI and JSON output.
-- `available()` — cheap probe (usually `command -v <bin>`). Must not throw. Returning `false` removes the adapter from this run silently.
+- `available()` — cheap probe (usually `has("<bin>")`, a PATH lookup). Must not throw. Returning `false` removes the adapter from this run silently.
 - `scan({ refresh, checkUpdates })` — does the actual work. `refresh: true` means "ignore the cache" and is forwarded to `cache.memoize(...)`. `checkUpdates: false` means installed-only discovery; adapters should skip slow latest/outdated calls and return `unknown` status when freshness was not checked.
 
 Adapters must tolerate optional metadata parse failures. A failing adapter never blocks the others; errors are caught inside the scanner loop and surfaced in `perManager[name].error` rather than thrown out of the whole scan. Plugin adapters that reuse a built-in name are ignored so cache keys and result maps stay unambiguous.
@@ -143,7 +144,7 @@ Everything else (cache use, network calls, argv shape) is up to the adapter. See
 
 ## Threading model
 
-Single-threaded JS, like always. The "parallel" scans are concurrent I/O — each adapter spends most of its time awaiting subprocesses or HTTP responses, so they overlap freely. Nothing in `pkgstate` is CPU-bound.
+Single-threaded JS, like always. The "parallel" scans are concurrent I/O — each adapter spends most of its time awaiting subprocesses or HTTP responses, so they overlap freely. Nothing in `kavach` is CPU-bound.
 
 ## What deliberately isn't here
 

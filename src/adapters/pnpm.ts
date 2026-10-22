@@ -1,5 +1,5 @@
 import type { Adapter, Package } from "../types";
-import { has, run } from "../util";
+import { has, run, runListing } from "../util";
 
 /**
  * pnpm adapter — global packages from `pnpm list -g --json --depth=0`.
@@ -11,7 +11,9 @@ export const pnpm: Adapter = {
     return has("pnpm");
   },
   async scan({ checkUpdates }) {
-    const list = await run(["pnpm", "list", "-g", "--json", "--depth=0"], { timeoutMs: 30_000 });
+    const list = await runListing(["pnpm", "list", "-g", "--json", "--depth=0"], {
+      timeoutMs: 30_000,
+    });
     let installed: Record<string, string> = {};
     try {
       const parsed = JSON.parse(list.stdout || "[]");

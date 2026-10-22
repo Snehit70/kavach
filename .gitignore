@@ -36,6 +36,6 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 # stray Python venv from earlier scaffold (pre-Bun pivot)
 .venv
 
-# pkgstate runtime cache (created at ~/.cache/pkgstate, never here, but defensive)
-pkgstate-cache.json
+# kavach runtime cache (created at ~/.cache/kavach, never here, but defensive)
+kavach-cache.json
 
