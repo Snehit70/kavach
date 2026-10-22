@@ -1,5 +1,5 @@
 import type { Adapter, Package } from "../types";
-import { has, run } from "../util";
+import { has, run, runListing } from "../util";
 
 export const snap: Adapter = {
   name: "snap",
@@ -7,7 +7,7 @@ export const snap: Adapter = {
     return has("snap");
   },
   async scan({ checkUpdates }) {
-    const list = await run(["snap", "list"], { timeoutMs: 10_000 });
+    const list = await runListing(["snap", "list"], { timeoutMs: 10_000 });
     if (list.exitCode !== 0) return [];
     const lines = list.stdout.split("\n").slice(1).filter(Boolean);
     const installed = new Map<string, string>();

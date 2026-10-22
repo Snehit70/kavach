@@ -1,7 +1,7 @@
 import { memoize } from "../cache";
 import { httpFetch } from "../http";
 import type { Adapter, Package } from "../types";
-import { cmpVersions, has, run } from "../util";
+import { cmpVersions, has, runListing } from "../util";
 
 /**
  * cargo adapter — installed via `cargo install --list`.
@@ -14,7 +14,7 @@ export const cargo: Adapter = {
     return has("cargo");
   },
   async scan({ refresh, checkUpdates }) {
-    const list = await run(["cargo", "install", "--list"], { timeoutMs: 15_000 });
+    const list = await runListing(["cargo", "install", "--list"], { timeoutMs: 15_000 });
     if (list.exitCode !== 0) return [];
 
     const installed: Array<{ name: string; version: string }> = [];

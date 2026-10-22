@@ -1,5 +1,5 @@
 import type { Adapter, Package } from "../types";
-import { has, run } from "../util";
+import { has, runListing } from "../util";
 
 /**
  * VS Code extensions adapter — `code --list-extensions --show-versions`.
@@ -12,7 +12,9 @@ export const vscode: Adapter = {
     return has("code");
   },
   async scan() {
-    const r = await run(["code", "--list-extensions", "--show-versions"], { timeoutMs: 15_000 });
+    const r = await runListing(["code", "--list-extensions", "--show-versions"], {
+      timeoutMs: 15_000,
+    });
     if (r.exitCode !== 0) return [];
     const out: Package[] = [];
     for (const raw of r.stdout.split("\n")) {

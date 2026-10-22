@@ -108,7 +108,9 @@ export async function scan(opts: ScanOptions = {}): Promise<ScanResult> {
         const pkgs = await memoizeJson<Package[]>(
           cacheKey,
           () => a.scan({ refresh, checkUpdates }),
-          { refresh, freshMs, staleMs },
+          // An empty list is cheap to recompute and is often a listing command
+          // that failed quietly; caching it would hide the manager for minutes.
+          { refresh, freshMs, staleMs, keep: (v) => v !== "[]" },
         );
         const outdated = pkgs.filter((p) => p.status === "outdated").length;
         perManager[a.name] = {

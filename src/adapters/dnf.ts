@@ -1,5 +1,5 @@
 import type { Adapter, Package } from "../types";
-import { has, run } from "../util";
+import { has, run, runListing } from "../util";
 
 /**
  * dnf adapter — Fedora/RHEL system packages.
@@ -13,7 +13,7 @@ export const dnf: Adapter = {
     return (await has("dnf")) && (await has("rpm"));
   },
   async scan({ checkUpdates }) {
-    const installed = await run(["rpm", "-qa", "--qf", "%{NAME}\t%{VERSION}-%{RELEASE}\n"], {
+    const installed = await runListing(["rpm", "-qa", "--qf", "%{NAME}\t%{VERSION}-%{RELEASE}\n"], {
       timeoutMs: 30_000,
     });
     const map = new Map<string, string>();

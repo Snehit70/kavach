@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { has, run } from "../src/util";
+import { has, run, runListing } from "../src/util";
 
 describe("run", () => {
   test("captures stdout and exit code", async () => {
@@ -18,6 +18,12 @@ describe("run", () => {
     const r = await run(["sleep", "30"], { timeoutMs: 100 });
     expect(r.exitCode).toBe(124);
     expect(performance.now() - t0).toBeLessThan(5_000);
+  });
+
+  test("a listing that times out throws instead of looking empty", async () => {
+    await expect(runListing(["sleep", "30"], { timeoutMs: 100 })).rejects.toThrow(
+      "sleep 30 timed out",
+    );
   });
 
   test("escalates to SIGKILL when SIGTERM is ignored", async () => {

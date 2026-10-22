@@ -100,6 +100,25 @@ async function writeEntry(key: string, value: string | null, freshMs?: number) {
   scheduleFlush();
 }
 
+/** Store `value`, or forget the key when `keep` rejects it. */
+async function settleEntry(
+  key: string,
+  value: string | null,
+  opts: MemoizeOptions,
+  freshMsOnNull: number,
+) {
+  if (opts.keep && !opts.keep(value)) {
+    const data = await load();
+    if (key in data.entries) {
+      delete data.entries[key];
+      dirty = true;
+      scheduleFlush();
+    }
+    return;
+  }
+  await writeEntry(key, value, value === null ? freshMsOnNull : undefined);
+}
+
 export interface MemoizeOptions {
   /** Force a blocking fetch and overwrite the cached value. */
   refresh?: boolean;
@@ -109,6 +128,11 @@ export interface MemoizeOptions {
   staleMs?: number;
   /** When the fetcher returns null, use this freshness instead (negative-cache). */
   freshMsOnNull?: number;
+  /**
+   * Whether a fetched value may be cached. A rejected value is still returned,
+   * but the key is forgotten so the next call fetches again.
+   */
+  keep?: (value: string | null) => boolean;
 }
 
 /**
@@ -135,12 +159,14 @@ export async function memoize(
 
   if (opts.refresh) {
     const v = await runOnce(key, fn);
-    await writeEntry(key, v, v === null ? freshMsOnNull : undefined);
+    await settleEntry(key, v, opts, freshMsOnNull);
     return v;
   }
 
   const data = await load();
-  const entry = data.entries[key];
+  const cached = data.entries[key];
+  // Also covers values cached before the caller started rejecting them.
+  const entry = cached && (!opts.keep || opts.keep(cached.value)) ? cached : undefined;
   const age = entry ? Date.now() - entry.ts : Infinity;
   const entryFresh = entry?.freshMs ?? freshMs;
 
@@ -154,7 +180,7 @@ export async function memoize(
       const p = (async () => {
         try {
           const v = await fn();
-          await writeEntry(key, v, v === null ? freshMsOnNull : undefined);
+          await settleEntry(key, v, opts, freshMsOnNull);
           return v;
         } catch {
           return entry.value;
@@ -169,7 +195,7 @@ export async function memoize(
 
   // Missing or dead — block on fresh fetch.
   const v = await runOnce(key, fn);
-  await writeEntry(key, v, v === null ? freshMsOnNull : undefined);
+  await settleEntry(key, v, opts, freshMsOnNull);
   return v;
 }
 

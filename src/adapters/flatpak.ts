@@ -1,5 +1,5 @@
 import type { Adapter, Package } from "../types";
-import { has, run } from "../util";
+import { has, run, runListing } from "../util";
 
 export const flatpak: Adapter = {
   name: "flatpak",
@@ -7,9 +7,12 @@ export const flatpak: Adapter = {
     return has("flatpak");
   },
   async scan({ checkUpdates }) {
-    const list = await run(["flatpak", "list", "--app", "--columns=application,version,branch"], {
-      timeoutMs: 15_000,
-    });
+    const list = await runListing(
+      ["flatpak", "list", "--app", "--columns=application,version,branch"],
+      {
+        timeoutMs: 15_000,
+      },
+    );
     const items = list.stdout
       .split("\n")
       .map((l) => l.trim())

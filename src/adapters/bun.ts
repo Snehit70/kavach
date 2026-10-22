@@ -1,7 +1,7 @@
 import { memoize } from "../cache";
 import { httpFetch } from "../http";
 import type { Adapter, Package } from "../types";
-import { cmpVersions, has, run } from "../util";
+import { cmpVersions, has, runListing } from "../util";
 
 /**
  * bun adapter — packages installed via `bun install -g`.
@@ -15,7 +15,7 @@ export const bun: Adapter = {
     return has("bun");
   },
   async scan({ refresh, checkUpdates }) {
-    const r = await run(["bun", "pm", "ls", "-g"], { timeoutMs: 15_000 });
+    const r = await runListing(["bun", "pm", "ls", "-g"], { timeoutMs: 15_000 });
     if (r.exitCode !== 0) return [];
 
     const installed: Array<{ name: string; version: string }> = [];

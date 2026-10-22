@@ -1,5 +1,5 @@
 import type { Adapter, Package } from "../types";
-import { has, run } from "../util";
+import { has, run, runListing } from "../util";
 
 export const pip: Adapter = {
   name: "pip",
@@ -8,7 +8,9 @@ export const pip: Adapter = {
   },
   async scan({ checkUpdates }) {
     const bin = (await has("pip3")) ? "pip3" : "pip";
-    const listed = await run([bin, "list", "--user", "--format=json"], { timeoutMs: 30_000 });
+    const listed = await runListing([bin, "list", "--user", "--format=json"], {
+      timeoutMs: 30_000,
+    });
     let installed: { name: string; version: string }[] = [];
     if (listed.exitCode === 0) {
       try {

@@ -99,6 +99,16 @@ describe("cache", () => {
     expect(v3).toBe("call-2");
   });
 
+  test("keep: a rejected value is returned but not cached", async () => {
+    let calls = 0;
+    const fetcher = async () => (calls++ === 0 ? "" : "full");
+    const keep = (v: string | null) => v !== "";
+    expect(await memoize("keep", fetcher, { keep })).toBe("");
+    expect(await memoize("keep", fetcher, { keep })).toBe("full");
+    expect(await memoize("keep", fetcher, { keep })).toBe("full");
+    expect(calls).toBe(2);
+  });
+
   test("dead entry past staleMs blocks on fresh fetch", async () => {
     let calls = 0;
     await memoize(

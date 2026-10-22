@@ -1,5 +1,5 @@
 import type { Adapter, Package } from "../types";
-import { has, run } from "../util";
+import { has, run, runListing } from "../util";
 
 export const brew: Adapter = {
   name: "brew",
@@ -7,7 +7,7 @@ export const brew: Adapter = {
     return has("brew");
   },
   async scan({ checkUpdates }) {
-    const list = await run(["brew", "list", "--versions"], { timeoutMs: 30_000 });
+    const list = await runListing(["brew", "list", "--versions"], { timeoutMs: 30_000 });
     const installed = new Map<string, string>();
     for (const line of list.stdout.split("\n")) {
       const trimmed = line.trim();

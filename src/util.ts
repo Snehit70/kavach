@@ -52,6 +52,18 @@ export async function run(
   }
 }
 
+/**
+ * `run` for the command that lists what a manager has installed. A timeout
+ * throws: an empty listing would read as "nothing installed" and drop that
+ * manager from the scan and the security check without a word.
+ */
+export async function runListing(argv: string[], opts: { timeoutMs: number }): Promise<RunResult> {
+  const r = await run(argv, opts);
+  if (r.exitCode === 124)
+    throw new Error(`${argv.join(" ")} timed out after ${opts.timeoutMs / 1000}s`);
+  return r;
+}
+
 /** Pre-release markers that sort *before* the bare release (semver / PEP 440 style). */
 const PRERELEASE =
   /(?:[-.+_]|(?<=\d))(?:alpha|beta|rc|pre|preview|dev|canary|nightly|snapshot)(?=[\d.\-_+]|$)/i;
