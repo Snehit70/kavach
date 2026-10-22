@@ -11,6 +11,7 @@ await runTui({}, {
   loadSnapshot: async () => snap,
   loadHistory: async () => [],
   scan: async () => new Promise(() => {}), // never resolves: steady "refreshing" state
+  detectNerdFont: async () => process.env.ICONS === "1",
 });
 await renderOnce();
 const time = async (label: string, n: number, fn: () => void | Promise<void>) => {

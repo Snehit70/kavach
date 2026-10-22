@@ -18,11 +18,19 @@
 - Redesigned web UI: sortable table, search, status and manager filters with counts, version-bump badges, copy-update-command button, stale-data hint, keyboard shortcuts, light/dark theme, and loading / empty / error states.
 - TUI side panel on terminals 130 columns or wider: full package detail, update command, extra fields, manager stats, and the marked set beside the table.
 - Redesigned TUI: one line per package with aligned columns, a full-width selected row with a `▌` bar, version-bump labels, a scrollbar, match count and sort order beside the filter, scan progress and data age in the header, and a three-line detail pane.
+- TUI visual refresh: solid themed background with layered surfaces, a rounded table frame with column grid lines and zebra rows, view tabs with counts in the frame, a health bar in the header, highlighted version diffs (`1.2.`**`16`**), tinted bump chips, per-manager colours, mode pill and toasts in the footer, and a framed detail panel with the registry link and a per-manager overview.
+- TUI themes (`t`: catppuccin, tokyo-night, gruvbox) and Nerd Font icons (`I`, auto-detected via `fc-list`, `PKGSTATE_ICONS=0/1` to force).
+- TUI views (`Tab` / `Shift-Tab`, `o`): All, Outdated, Major, Minor, Patch, Unknown, Marked.
+- TUI keys: `[` / `]` jump between managers, `n` / `N` next / previous outdated, `z` centre, `a` mark all in view, `i` invert marks, `w` open the package page, `Y` copies the marked packages' commands. Clicking tabs and column headers works.
+- TUI settings (sort, grouping, detail pane, view, theme, icons) persist in `~/.local/state/pkgstate/tui.json`.
+- TUI: a finished scan reports new updates, upgrades, additions and removals.
+- Filter scopes `:major`, `:minor`, `:patch` and `:b=<bump>`.
 - `scan` warns about managers that were not scanned and exits `1` if every scanned manager failed.
 
 ### Fixed
 
 - A missing or non-executable binary no longer throws from adapters (reported as exit 127); timed-out children are killed with SIGKILL if they ignore SIGTERM.
+- TUI: `G`, `S`, `Y` and `U` work. Shifted letters arrive as the lowercase key with a shift flag, so those bindings never fired.
 - TUI: pressing `/` no longer inserts a literal `/` into the filter.
 - TUI: the cursor stays on the selected package when re-sorting, regrouping, or when scan results arrive, instead of jumping to whatever package lands at the same row.
 - Every non-TUI command starts about 300 ms faster (`pkgstate --version` 383 ms → 60 ms) because the TUI and opentui are loaded only when needed.

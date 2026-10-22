@@ -5,33 +5,40 @@ The terminal UI lives in `src/tui.ts` and uses `@opentui/core` directly (no Reac
 ## Layout
 
 ```
- pkgstate   482 packages   ● 17 outdated   2 unknown                 updated 3m ago
-
- / filter   pip rich · :outdated · :m=npm · :s=unknown         sort status ↑
-
-    PACKAGE              MANAGER  INSTALLED      LATEST
-▌ ● rich                 pip      14.2.0       → 15.0.0         major  ┃
-  ● typescript           npm      5.4.2        → 5.4.5          patch  │
-  ○ github.copilot       vscode   1.301.0                              │
-  · bun-types            npm      1.2.13         ?                     │
-────────────────────────────────────────────────────────────────────────
- ● rich  pip   14.2.0 → 15.0.0  major update
- $ pip3 install --user --upgrade rich                       u run  Y copy
-                                     pip: 31 packages, scanned in 219ms
- ? help  / filter  j/k move  space mark  u update  r rescan  q quit  1 / 482
+  ◆ pkgstate   3944 packages  ·  10 managers   ━━━━━━━━━━━━━━ 64% current        ✓ updated 3m ago
+╭─ All 3944  Outdated 1404  Major 96  Minor 628  Patch 520  Unknown 13  Marked 0 ── status ↑ ─╮╭─ Details ───────╮
+│ / filter   pip rich · :major · :m=npm · :s=unknown                                          ││ ada-url         │
+├──────────────────────────────┬─────────┬─────────────────────────────────┬─────────┤│ brew · ● major  │
+│    PACKAGE                   │ MANAGER │      INSTALLED   LATEST         │ BUMP    ││                 │
+├──────────────────────────────┼─────────┼─────────────────────────────────┼─────────┤│ installed 3.4.2 │
+│▌ ● ada-url                   │ brew    │          3.4.2 → 4.0.0_1        │  major  ┃│ UPDATE ──────── │
+│  ● alsa-lib                  │ brew    │       1.2.15.1 → 1.2.16.1_1     │  patch  ││  $ brew upgrade │
+│  ○ rich                      │ pip     │         13.7.0                  │         ││ MANAGERS ────── │
+╰─ ✓ 2 marked ─────────────────┴─────────┴─────────────────────────── 1 of 3944 ─╯╰─────────────────╯
+  NORMAL   ? help   / filter   ⇥ view   ␣ mark   u update   U update marked   w open        ✓ copied
 ```
 
-The root is a `BoxRenderable` with `flexDirection: "column"`:
+The screen is drawn on a solid background with three surface levels: the header and footer bars and the column-header row sit on a darker `mantle`, the table on `base`, and every other row is slightly lifted (zebra striping). Frame lines are rounded and turn the accent colour when no overlay is open; interior grid lines are dimmer. Saturated colours only ever mean status: red / peach / yellow for major / minor / patch bumps, green for up to date.
 
-- **Header**: brand and package counts on the left. On the right: the adapter-error count, the scan spinner and progress while scanning, or how old the data is ("updated 3m ago", refreshed every 30 s).
-- **Filter row**: `/` prompt, the input, and on the right the match count ("12 of 482") and the active ordering ("sort status ↑", "by match" while fuzzy-ranking, "by manager" in grouped mode). Narrow terminals get a shorter placeholder.
-- **Table**: a one-line column header and a body with one line per package. The selected row has a `▌` bar and a full-width background. A scrollbar is drawn in the last column.
-- **Detail pane** (toggle with `d`): the selected package, its update command, extra fields, and that manager's package count and scan time (or its error). Below 130 columns it is a three-line strip under the table. From 130 columns up it becomes a side panel to the right of the table, separated by the scrollbar track. The side panel also lists the marked packages. It takes the width the table can't use (42–72 columns), measured from the full package set so it doesn't resize while you filter.
-- **Footer**: key hints that drop off from the right as the terminal narrows, a transient flash message, and "selected / total".
+- **Header bar**: brand pill, package and manager counts, a stacked health bar (current, patch, minor, major, unknown) with the share of current packages. On the right: an adapter-error pill, scan progress (`3/11` with a bar and the managers still running), or how old the data is.
+- **Table frame**: the top edge holds the view tabs with live counts (`All`, `Outdated`, `Major`, `Minor`, `Patch`, `Unknown`, `Marked`; abbreviated when narrow) and the active ordering. Below it are the filter input with the match count ("12 of 3944"), the column header (the active sort column is highlighted and shows `↑`/`↓`), and one row per package. The scrollbar thumb rides the right edge. The bottom edge shows the marked count and "selected of total".
+- **Rows**: selection bar, mark `✓`, status glyph coloured by bump, name (fuzzy matches underlined), manager (with its own colour and, with Nerd Fonts, its logo), installed `→` latest with the changed part of the version highlighted (`1.2.`**`16`**), and a tinted bump chip.
+- **Detail** (toggle with `d`): from 130 columns up a framed side panel with the package, versions, the update command, its registry page, extra fields, the marked set, and an overview of every manager (count, outdated share, failures). It takes the width the table can't use (44 columns up to 42% of the screen), measured from the full package set so it doesn't resize while you filter. Below 130 columns it is a framed three-line strip under the table.
+- **Footer bar**: a mode pill (`NORMAL`, `FILTER`, `CONFIRM`, `HELP`, `ERRORS`), key hints that drop off as the terminal narrows, and a toast (`✓` ok, `!` warning, `✗` error) on the right.
 
-Column widths are computed once per result set from the 95th percentile of name and version lengths, not from the visible rows, so columns don't shift while scrolling. Spare width goes to the name column first, then the versions. On narrow terminals the versions shrink first (truncated with `…`), then the name; below 72 columns the bump column (`major` / `minor` / `patch`) is hidden.
+Every frame line is built as styled text, one `TextRenderable` per region, so a frame is a handful of text updates rather than a relayout of hundreds of boxes.
 
-The package table is virtualized. `state.selected` indexes the full filtered result set, but each render only builds the visible rows for the current terminal height, as one `StyledText` written to a single `TextRenderable`. Navigation repaints only the changed lines.
+## Themes, icons and saved settings
+
+`t` cycles three dark themes: `catppuccin` (Mocha, the default), `tokyo-night` and `gruvbox`.
+
+`I` toggles [Nerd Font](https://www.nerdfonts.com/) glyphs: manager logos, rounded pill caps, and codicon search / check / warning / link icons. On first run pkgstate turns them on if `fc-list` reports any installed Nerd Font. Set `PKGSTATE_ICONS=1` or `0` to force it. Only Basic Multilingual Plane code points are used, so every glyph is one cell wide.
+
+Sort key and direction, grouping, the detail pane, the current view, the theme and the icon setting are saved to `$XDG_STATE_HOME/pkgstate/tui.json` (default `~/.local/state/pkgstate/tui.json`) whenever they change. Invalid values in the file are ignored.
+
+Column widths are computed once per result set from the 95th percentile of name and version lengths, not from the visible rows, so columns don't shift while scrolling. Spare width goes to long names first, then long versions, then the name column, so the grid always meets the right edge. On narrow terminals the versions shrink first (truncated with `…`), then the name; below 72 columns the bump column (`major` / `minor` / `patch`) is hidden.
+
+The package table is virtualized. `state.selected` indexes the full filtered result set, but each render only builds the visible rows for the current terminal height, as one `StyledText` written to a single `TextRenderable`. Navigation repaints only the changed lines. Column widths are measured over the filtered set before the view is applied, so switching tabs doesn't shift columns.
 
 ## Components in play
 
@@ -56,8 +63,9 @@ interface UiState {
   filterFocused: boolean;
   sortKey: SortKey;         // status | manager | name | installed | latest
   sortDir: SortDir;         // asc | desc
-  confirm?: ConfirmDialog;
-  flash?: string;           // transient footer message
+  view: View;               // all | outdated | major | minor | patch | unknown | marked
+  confirm?: ConfirmDialog;  // title, package count, batched commands per manager
+  flash?: { text; kind };   // footer toast: info | ok | warn | error
   showErrors: boolean;
   showHelp: boolean;
   showDetail: boolean;
@@ -83,29 +91,38 @@ Additional UI caches hold package stats, group summaries, and logical table rows
 | Key | Action |
 |-----|--------|
 | `/` | Focus the filter input |
-| `j` / `↓` | Move selection down |
-| `k` / `↑` | Move selection up |
-| `g` | Jump to top |
-| `G` | Jump to bottom |
+| `j` / `↓`, `k` / `↑` | Move selection |
+| `g` / `G` | Jump to top / bottom |
 | `PgDn` / `PgUp` | Page selection down/up |
 | `Ctrl-d` / `Ctrl-u` | Half-page down/up |
+| `[` / `]` | Previous / next manager block |
+| `n` / `N` | Next / previous outdated package (wraps) |
+| `z` | Scroll so the selection is centred |
+| `Tab` / `Shift-Tab` | Next / previous view tab |
+| `o` | Toggle the Outdated view |
 | `space` | Mark/unmark selected package and advance |
-| `Esc` | Clear marked packages |
-| `o` | Toggle outdated-only filter |
+| `a` | Mark every updatable row in the view (again: unmark them) |
+| `i` | Invert marks in the view |
+| `Esc` | Clear marks, else the filter, else go back to the All view |
 | `c` | Clear the filter |
 | `m` | Toggle manager grouping |
 | `d` | Toggle detail pane |
 | `e` | Show adapter errors |
 | `?` | Show help |
 | `y` | Copy `manager/name@installed` |
-| `Y` | Copy selected update command |
+| `Y` | Copy the update commands for the marked packages, else the selected one |
+| `w` | Open the package's registry page in the browser |
 | `s` | Cycle sort column: `status → manager → name → installed → latest → …` |
 | `S` | Reverse sort direction |
-| `1`..`5` | Sort directly by status/manager/name/installed/latest |
+| `1`..`5` | Sort by status/manager/name/installed/latest (again: reverse) |
+| `t` | Next theme |
+| `I` | Nerd Font icons on / off |
 | `r` | Rescan all adapters (bypasses the latest-version cache) |
 | `u` | Confirm + run `updateCmd` for the selected package |
-| `U` | Confirm + run marked packages, or every visible outdated package if none are marked |
+| `U` | Confirm + run marked packages, or every outdated package in the view if none are marked |
 | `q` | Quit (restores the terminal, then exits 0) |
+
+Mouse: the wheel scrolls; clicking a row selects it, a tab switches view, a column header sorts by it (again: reverse), and the filter row focuses the input.
 
 ### Filter focused
 
@@ -115,6 +132,7 @@ Additional UI caches hold package stats, group summaries, and logical table rows
 | `↑` / `↓` | Recall previous filter entries |
 | `Enter` | Leave filter focus, keep the current filter |
 | `Esc` | Clear the filter and leave focus |
+| `Tab` / `Shift-Tab` | Switch view without leaving the filter |
 
 ### Confirm overlay shown
 
@@ -137,6 +155,8 @@ The filter is parsed by `src/filter.ts`. The grammar is intentionally minimal:
 | `:unknown` | status = unknown |
 | `:s=<status>` / `:status <status>` | same as the bare status form |
 | `:m=<manager>` / `:manager <manager>` | manager equals this string (case-insensitive) |
+| `:major` / `:minor` / `:patch` | outdated with that version bump |
+| `:b=<bump>` / `:bump <bump>` | same, also accepts `other` (revision or non-semver changes) |
 
 Clauses compose freely with fuzzy tokens:
 
@@ -146,6 +166,7 @@ Clauses compose freely with fuzzy tokens:
 | `pip rich` | fuzzy "pip" AND fuzzy "rich" |
 | `:outdated` | every outdated package |
 | `:m=npm :outdated` | npm packages that are outdated |
+| `:major :minor` | major or minor updates |
 | `:m=pip rich` | pip packages whose name fuzzy-matches "rich" |
 | `:s=unknown go` | unknown-status packages fuzzy-matching "go" |
 
@@ -177,7 +198,9 @@ The table uses compact glyphs:
 |-------|--------|
 | `●` | outdated |
 | `○` | up-to-date |
-| `·` | unknown |
+| `◌` | unknown |
+
+Outdated glyphs take the bump colour.
 
 The selected row detail pane shows identity, installed/latest versions, semver-ish bump severity, the update command, selected `extra` fields, and the latest per-manager scan timing/error.
 
@@ -186,7 +209,7 @@ The selected row detail pane shows identity, installed/latest versions, semver-i
 Single update (`u`) and bulk update (`U`) share one mechanism:
 
 1. Build a list of `{ cmd, label }`. For `u` it's one entry; for `U` it's marked packages, or every visible outdated package with an `updateCmd`.
-2. Set `state.confirm = { title, cmds }`; the overlay shows up to 5 commands plus an "and N more" footer.
+2. Batch them per manager (`batchUpdates`) and set `state.confirm`. The overlay lists each command with its manager and package count, as many as fit, plus an "and N more" line.
 3. On `y`:
    1. `renderer.suspend()` — opentui hands back the terminal.
    2. For each command: print `[i/N] $ <argv>`, `Bun.spawn` with `stdio: ["inherit","inherit","inherit"]`, await, print `(exit N)`. A command that cannot be spawned reports exit 127 and the run continues.
@@ -199,7 +222,7 @@ Before confirmation, commands are validated as argv: empty commands, shell wrapp
 
 The TUI starts from the latest snapshot if one exists, then replaces each manager's rows as progress events arrive. Pressing `r` while a scan is already active shows a footer flash instead of starting a second overlapping scan.
 
-Scan failures never crash the UI; they show up in the footer flash and in the adapter-errors overlay (`e`).
+When a scan finishes, the footer reports what changed since the previous data: new updates, upgraded, added and removed packages. Scan failures never crash the UI; they show up in the footer flash and in the adapter-errors overlay (`e`).
 
 ## Shutdown
 
