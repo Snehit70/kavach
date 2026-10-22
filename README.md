@@ -1,6 +1,8 @@
-# pkgstate
+# kavach
 
 A laptop-wide package state manager. One TUI that shows every package installed across every package manager on your system, which are outdated, and lets you update them on demand.
+
+![kavach TUI: security banner, the Fix now section at the top of the table, and the detail panel with the advisory, safe target and update command](docs/images/tui.png)
 
 ## Supported package managers
 
@@ -28,10 +30,10 @@ bun install
 bun run src/cli.ts              # launch the TUI
 bun run src/cli.ts scan         # human summary + outdated table
 bun run src/cli.ts scan --json  # machine-readable output
-bun run build                   # compile ./dist/pkgstate
+bun run build                   # compile ./dist/kavach
 ```
 
-For local shell use, run `bun link` from this repo and then call `pkgstate`.
+For local shell use, run `bun link` from this repo and then call `kavach`.
 
 ## TUI keys
 
@@ -63,13 +65,14 @@ bun run src/cli.ts cache show
 bun run src/cli.ts daemon --once
 bun run src/cli.ts web --port 4321
 bun run src/cli.ts vulns
+bun run src/cli.ts vulns --manager pip --verbose
 bun run src/cli.ts diff
 ```
 
 ## Cache
 
-Latest-version lookups are cached at `~/.cache/pkgstate/cache.json` with **stale-while-revalidate**: registry lookups are fresh for 1 h and usable stale for 7 days; whole-adapter scan results are fresh for 15 min and usable stale for 2 h. Press `r` in the TUI or run `pkgstate scan --refresh` to force a refresh. See [docs/caching.md](docs/caching.md).
+Latest-version lookups are cached at `~/.cache/kavach/cache.json` with **stale-while-revalidate**: registry lookups are fresh for 1 h and usable stale for 7 days; whole-adapter scan results are fresh for 15 min and usable stale for 2 h. Press `r` in the TUI or run `kavach scan --refresh` to force a refresh. See [docs/caching.md](docs/caching.md).
 
 ## Docs
 
-Long-form documentation lives in [`docs/`](docs/README.md): architecture, adapters, TUI, CLI, caching, filter language, adding adapters, troubleshooting.
+Long-form documentation lives in [`docs/`](docs/README.md): architecture, adapters, TUI, CLI, security checks, caching, filter language, adding adapters, troubleshooting.
