@@ -33,3 +33,5 @@ jobs:
         run: |
           bun build --target=bun src/cli.ts --outdir=dist-smoke
           bun dist-smoke/cli.js --version
+      - name: Changelog has an Unreleased section
+        run: grep -q '^## Unreleased' CHANGELOG.md

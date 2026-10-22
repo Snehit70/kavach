@@ -14,6 +14,7 @@
 
 ### Added
 
+- Release tooling: `bun run release patch|minor|major|X.Y.Z` bumps `package.json` and moves `## Unreleased` into a dated section. Tagged builds fail if the tag doesn't match `package.json` or the changelog, smoke-test the linux-x64 binary, and use the changelog section as the GitHub release notes (tags with a `-` are pre-releases). Dependabot keeps actions and dependencies current.
 - `kavach --version`.
 - `kavach vulns --json`, `--exit-code`, `--refresh`.
 - Security pipeline ([docs/security.md](docs/security.md)). Every package gets a verdict: `fix` (with a safe target that skips a vulnerable or too-new latest), `nofix`, `hold` (don't take the latest yet: it has advisories, is flagged malicious, or is inside the `[security] cooldown_days` window, 7 by default), `malware` or `ok`. Sources: OSV.dev for installed and latest versions, dnf security advisories, CISA KEV and FIRST EPSS, all cached.

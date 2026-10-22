@@ -73,6 +73,17 @@ bun run src/cli.ts diff
 
 Latest-version lookups are cached at `~/.cache/kavach/cache.json` with **stale-while-revalidate**: registry lookups are fresh for 1 h and usable stale for 7 days; whole-adapter scan results are fresh for 15 min and usable stale for 2 h. Press `r` in the TUI or run `kavach scan --refresh` to force a refresh. See [docs/caching.md](docs/caching.md).
 
+## Releasing
+
+```sh
+bun run release minor           # or patch, major, 1.2.0-rc.1
+git commit -am "release: v0.2.0"
+git tag -a v0.2.0 -m v0.2.0
+git push --follow-tags          # CI builds, checksums and publishes the release
+```
+
+The release workflow rejects a tag that doesn't match `package.json` or has no changelog section.
+
 ## Docs
 
 Long-form documentation lives in [`docs/`](docs/README.md): architecture, adapters, TUI, CLI, security checks, caching, filter language, adding adapters, troubleshooting.
