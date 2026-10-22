@@ -14,7 +14,15 @@ export const gem: Adapter = {
     const installed = new Map<string, string>();
     for (const line of fullList.stdout.split("\n")) {
       const m = line.match(/^(\S+)\s+\(([^)]+)\)/);
-      if (m) installed.set(m[1]!, m[2]!.split(",")[0]!.trim());
+      // Default gems print as "name (default: 1.2.3)".
+      if (m)
+        installed.set(
+          m[1]!,
+          m[2]!
+            .split(",")[0]!
+            .replace(/^default:\s*/, "")
+            .trim(),
+        );
     }
 
     if (!checkUpdates) {
