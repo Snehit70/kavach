@@ -42,6 +42,7 @@
 
 ### Fixed
 
+- Package managers are found on Debian and Ubuntu. Detection ran `command -v` through Bun's shell, which has no `command` builtin, so it only worked where `/usr/bin/command` exists (Fedora) and reported every manager missing elsewhere. It now looks binaries up on `PATH` directly.
 - TUI: label blocks are square (the Nerd Font half-circle caps are gone), several installed versions show as `2.7.5 +1`, RPM epochs on the latest version are hidden when the installed one has none, and the banner no longer reads "no known vulnerabilities in 0 checked" before anything was checked.
 
 - gem: default gems no longer report their version as `default: 1.2.3`, which OSV matched against every advisory.

@@ -130,7 +130,7 @@ interface Adapter {
 ```
 
 - `name` — short id used in the UI and JSON output.
-- `available()` — cheap probe (usually `command -v <bin>`). Must not throw. Returning `false` removes the adapter from this run silently.
+- `available()` — cheap probe (usually `has("<bin>")`, a PATH lookup). Must not throw. Returning `false` removes the adapter from this run silently.
 - `scan({ refresh, checkUpdates })` — does the actual work. `refresh: true` means "ignore the cache" and is forwarded to `cache.memoize(...)`. `checkUpdates: false` means installed-only discovery; adapters should skip slow latest/outdated calls and return `unknown` status when freshness was not checked.
 
 Adapters must tolerate optional metadata parse failures. A failing adapter never blocks the others; errors are caught inside the scanner loop and surfaced in `perManager[name].error` rather than thrown out of the whole scan. Plugin adapters that reuse a built-in name are ignored so cache keys and result maps stay unambiguous.

@@ -40,4 +40,15 @@ describe("has", () => {
     expect(await has("sh")).toBe(true);
     expect(await has("definitely-not-a-real-binary-xyz")).toBe(false);
   });
+
+  test("does not depend on a `command` binary being installed", async () => {
+    const path = process.env.PATH;
+    process.env.PATH = "/nonexistent";
+    try {
+      expect(await has("sh")).toBe(false);
+    } finally {
+      process.env.PATH = path;
+    }
+    expect(await has("sh")).toBe(true);
+  });
 });

@@ -37,7 +37,7 @@ bun run src/cli.ts scan --refresh
 
 ## "A manager I have installed isn't showing up"
 
-Every adapter probes `command -v <bin>`. Quick check:
+Every adapter looks its binary up on `PATH`. Quick check:
 
 ```sh
 command -v dnf flatpak snap brew pip pip3 npm cargo gem go

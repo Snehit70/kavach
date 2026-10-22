@@ -1,12 +1,10 @@
-import { $ } from "bun";
-
+/**
+ * Whether `cmd` is an executable on PATH. Not `command -v` through Bun's shell:
+ * that has no `command` builtin and only worked where /usr/bin/command exists
+ * (Fedora), so every adapter looked unavailable on Debian and Ubuntu.
+ */
 export async function has(cmd: string): Promise<boolean> {
-  try {
-    const r = await $`command -v ${cmd}`.quiet().nothrow();
-    return r.exitCode === 0;
-  } catch {
-    return false;
-  }
+  return Bun.which(cmd, { PATH: process.env.PATH ?? "" }) !== null;
 }
 
 export interface RunResult {

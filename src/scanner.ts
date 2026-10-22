@@ -8,7 +8,7 @@ import type { Adapter, Package } from "./types";
 
 const collator = new Intl.Collator(undefined, { numeric: true });
 
-/** Per-process availability cache so we don't spawn `command -v` on every scan. */
+/** Per-process availability cache so adapters probe PATH once per process. */
 const availability = new Map<string, Promise<boolean>>();
 function isAvailable(a: Adapter): Promise<boolean> {
   const cached = availability.get(a.name);
