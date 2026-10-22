@@ -43,16 +43,20 @@ Every adapter probes `command -v <bin>`. Quick check:
 command -v dnf flatpak snap brew pip pip3 npm cargo gem go
 ```
 
-If the binary is installed somewhere not on `pkgstate`'s `PATH` (for example, you launched it from a desktop entry that doesn't load your shell rc), launch from a terminal where `which <bin>` succeeds.
+If the binary is installed somewhere not on `kavach`'s `PATH` (for example, you launched it from a desktop entry that doesn't load your shell rc), launch from a terminal where `which <bin>` succeeds.
 
-## "Update prompt asks for sudo and immediately fails"
+## "sudo password is rejected, or the update fails right away"
 
-The TUI calls `renderer.suspend()` and runs the update with inherited stdio specifically so that `sudo` can prompt you in the same terminal. If you see no prompt and an immediate failure:
+The TUI asks for the sudo password in its update panel and checks it with `sudo -S -v`, then runs each command as `sudo -n …` (see [tui.md](tui.md#sudo-without-a-terminal)). If the password is rejected or a sudo step fails with `a password is required`:
 
 - Confirm sudo works at all: `sudo -v`.
-- If you're behind `pkexec` / a graphical helper, run the update outside the TUI by copying the printed command.
+- If sudo authenticates with something other than a password (a fingerprint reader, a hardware key, `pkexec`), run `sudo -v` in a terminal first. The TUI sees the cached credentials and skips the prompt. Or copy the command with `Y` and run it yourself.
 
-The full command is printed to the terminal before it runs, so you always know what's about to execute.
+The full command is shown in the panel before it runs, so you always know what's about to execute.
+
+## "An update sits on one command with no output"
+
+Some package managers stall without printing anything: `bun install -g` can stay on `Resolving dependencies` with no CPU or network activity. After 20 seconds of silence the panel shows `quiet m:ss` for that command. Press `k` twice to kill it; the batch moves on to the next command. Run the killed command yourself later (`Y` copies it) to see whether it was slow or stuck.
 
 ## "After updating, the row still shows outdated"
 
@@ -66,10 +70,10 @@ The TUI calls `doScan(true)` (refresh) right after an update finishes. If a row 
 `cache.ts` reads the file with `JSON.parse`; a malformed file becomes an empty cache silently. To start clean:
 
 ```sh
-rm ~/.cache/pkgstate/cache.json
+rm ~/.cache/kavach/cache.json
 ```
 
-(Or `$XDG_CACHE_HOME/pkgstate/cache.json` if set.)
+(Or `$XDG_CACHE_HOME/kavach/cache.json` if set.)
 
 ## "TUI shows garbled characters / wrong colors"
 

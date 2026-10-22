@@ -1,7 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
 import { createTestRenderer } from "@opentui/core/testing";
 import type { ScanResult } from "../src/scanner";
-import { runTui, type TuiDeps, versionSplit } from "../src/tui";
+import { countVerdicts, type PackageSecurity } from "../src/security";
+import { installedLabel, latestLabel, runTui, type TuiDeps, versionSplit } from "../src/tui";
 
 const result: ScanResult = {
   packages: [
@@ -73,7 +74,7 @@ const selected = (row: string) => row.startsWith("│▌");
 function findRow(frame: string, name: string): string | undefined {
   return frame
     .split("\n")
-    .find((l) => l.slice(1, 5).match(/^[▌ ][✓ ][●○◌] $/) && l.slice(5).startsWith(`${name} `));
+    .find((l) => l.slice(1, 5).match(/^[▌ ][✓ ][●○◌▲✖‖] $/) && l.slice(5).startsWith(`${name} `));
 }
 
 function rowOf(frame: string, name: string): string {
@@ -168,7 +169,7 @@ test("wide terminals show the detail as a side panel", async () => {
   expect(f).toContain("installed  5.4.2");
   expect(f).toContain("MARKED 1");
   expect(f).toContain("✓ ripgrep  brew");
-  expect(f).toContain("Marked 1");
+  expect(f).toMatch(/Marked 1|Mrk 1/);
   expect(f).toContain("✓ 1 marked");
   // Grid: column rules meet the frame.
   expect(lines.some((l) => l.startsWith("├") && l.includes("┼"))).toBe(true);
@@ -201,6 +202,7 @@ test("Tab cycles views and the tabs show per-view counts", async () => {
   const first = await frame();
   expect(first).toContain("Outdated 2");
   expect(first).toContain("Major 1");
+  mockInput.pressTab(); // security
   mockInput.pressTab(); // outdated
   let f = await frame();
   expect(findRow(f, "rich")).toBeUndefined();
@@ -298,9 +300,243 @@ test("view settings are saved through the injected prefs store", async () => {
   expect(saved.at(-1)).toMatchObject({ sortKey: "name", groupByManager: true, theme: "gruvbox" });
 });
 
+function securityDeps(): Partial<TuiDeps> {
+  const sec = (s: Partial<PackageSecurity>): PackageSecurity => ({
+    verdict: "ok",
+    severity: "unknown",
+    advisories: [],
+    latestAdvisories: [],
+    reason: "",
+    kev: false,
+    source: "osv",
+    ...s,
+  });
+  const packages = new Map<string, PackageSecurity>([
+    [
+      "brew\0ripgrep\x0014.0.0",
+      sec({
+        verdict: "fix",
+        severity: "critical",
+        target: "15.1.0",
+        kev: true,
+        reason: "1 advisory fixed in 15.1.0",
+        advisories: [
+          {
+            id: "GHSA-rg",
+            aliases: ["CVE-2026-1"],
+            severity: "critical",
+            fixed: "15.1.0",
+            summary: "Path traversal",
+            url: "https://osv.dev/vulnerability/GHSA-rg",
+            kev: true,
+          },
+        ],
+      }),
+    ],
+    [
+      "npm\0typescript\x005.4.2",
+      sec({
+        verdict: "hold",
+        severity: "unknown",
+        reason: "5.4.5 was published 1d ago; wait 6d more",
+      }),
+    ],
+    ["pip\0rich\x0013.7.0", sec({})],
+  ]);
+  return {
+    security: async () => ({
+      checkedAt: Date.now(),
+      packages,
+      counts: countVerdicts(packages),
+      checked: 3,
+      failed: 0,
+      notCovered: 0,
+      errors: [],
+    }),
+  };
+}
+
+test("security banner, row markers, v view and side panel", async () => {
+  const { mockInput, frame } = await mount(160, 24, undefined, securityDeps());
+  let f = await frame();
+  expect(f).toContain("1 critical");
+  expect(f).toContain("1 hold");
+  expect(rowOf(f, "ripgrep").slice(1, 5)).toBe("▌ ▲ ");
+  expect(rowOf(f, "typescript").slice(1, 5)).toBe("  ‖ ");
+  expect(f).toContain("SECURITY");
+  expect(f).toContain("GHSA-rg");
+  expect(f).toContain("EXPLOITED");
+  mockInput.pressKey("v");
+  f = await frame();
+  expect(findRow(f, "rich")).toBeUndefined();
+  expect(findRow(f, "ripgrep")).toBeDefined();
+  expect(findRow(f, "typescript")).toBeDefined();
+  mockInput.pressKey("v");
+  f = await frame();
+  expect(findRow(f, "rich")).toBeDefined();
+});
+
+test("U warns about held packages and skips them unless marked", async () => {
+  const { mockInput, frame } = await mount(120, 24, undefined, securityDeps());
+  await frame();
+  mockInput.pressKey("U", { shift: true });
+  const f = await frame();
+  expect(f).toContain("brew upgrade ripgrep");
+  expect(f).not.toContain("npm install -g typescript@latest");
+  expect(f).toMatch(/Skipping 1 held/);
+});
+
+test("triage sections put urgent fixes first; f confirms every security fix", async () => {
+  const { mockInput, frame } = await mount(120, 24, undefined, securityDeps());
+  let f = await frame();
+  const lines = f.split("\n");
+  const at = (text: string) => lines.findIndex((l) => l.includes(text));
+  const row = (name: string) => lines.findIndex((l) => l.slice(5).startsWith(`${name} `));
+  expect(at("Fix now")).toBeGreaterThan(-1);
+  expect(at("Fix now")).toBeLessThan(row("ripgrep"));
+  expect(row("ripgrep")).toBeLessThan(at("Security  1"));
+  expect(at("Security  1")).toBeLessThan(row("typescript"));
+  expect(row("typescript")).toBeLessThan(at("Up to date"));
+  expect(at("Up to date")).toBeLessThan(row("rich"));
+  expect(f).toContain("install 1 security fix");
+  mockInput.pressKey("f");
+  f = await frame();
+  expect(f).toContain("install 1 security fix");
+  expect(f).toContain("brew upgrade ripgrep");
+  expect(f).not.toContain("npm install -g typescript@latest");
+});
+
+test("] jumps to the next section; ← → switch views", async () => {
+  const { mockInput, frame } = await mount(120, 24, undefined, securityDeps());
+  await frame();
+  mockInput.pressKey("]");
+  let f = await frame();
+  expect(selected(rowOf(f, "typescript"))).toBe(true);
+  mockInput.pressArrow("right"); // security
+  f = await frame();
+  expect(findRow(f, "rich")).toBeUndefined();
+  mockInput.pressArrow("left"); // all
+  f = await frame();
+  expect(findRow(f, "rich")).toBeDefined();
+});
+
+test("version labels collapse extra installs and hide a lone RPM epoch", () => {
+  expect(installedLabel("2.7.4 2.7.5")).toBe("2.7.5 +1");
+  expect(installedLabel("1.0")).toBe("1.0");
+  expect(latestLabel("11.8.6-2.fc44", "3:11.8.8-3.fc44")).toBe("11.8.8-3.fc44");
+  expect(latestLabel("3:11.8.6-2", "3:11.8.8-3")).toBe("3:11.8.8-3");
+});
+
 test("versionSplit separates the unchanged prefix at a segment boundary", () => {
   expect(versionSplit("1.2.15", "1.2.16")).toEqual(["1.2.", "16"]);
   expect(versionSplit("14.0.0", "15.1.0")).toEqual(["", "15.1.0"]);
   expect(versionSplit("2.7.4 2.7.5", "2.9.0")).toEqual(["2.", "9.0"]);
   expect(versionSplit("1.0", "1.0")).toEqual(["1.0", ""]);
+});
+
+test("u runs the update in place: sudo password prompt, live output, rescan", async () => {
+  const sudoResult: ScanResult = {
+    ...result,
+    packages: [
+      {
+        manager: "dnf",
+        name: "curl",
+        installed: "8.0.0",
+        latest: "8.1.0",
+        status: "outdated",
+        updateCmd: ["sudo", "dnf", "upgrade", "-y", "curl"],
+      },
+    ],
+  };
+  const calls: { argv: string[]; input?: string }[] = [];
+  let scans = 0;
+  const spawn: TuiDeps["spawn"] = async (argv, { input, onText }) => {
+    calls.push({ argv, input });
+    if (argv.join(" ") === "sudo -n true") return 1; // no cached credentials
+    if (argv.includes("-v")) return input === "hunter2\n" ? 0 : 1;
+    onText?.("Downloading  40%\rDownloading 100%\nComplete!\n");
+    return 0;
+  };
+  const { mockInput, frame } = await mount(
+    120,
+    30,
+    async () => {
+      scans++;
+      return sudoResult;
+    },
+    { spawn, loadSnapshot: async () => ({ result: sudoResult, ageMs: 60_000 }) },
+  );
+  await frame();
+  const scansBefore = scans;
+  mockInput.pressKey("u");
+  await frame();
+  mockInput.pressKey("y");
+  let f = await frame();
+  expect(f).toContain("sudo password");
+
+  await mockInput.typeText("wrong");
+  mockInput.pressEnter();
+  f = await frame();
+  expect(f).toContain("wrong password");
+  expect(f).not.toContain("wrong•");
+
+  await mockInput.typeText("hunter2");
+  f = await frame();
+  expect(f).toContain("•••••••");
+  expect(f).not.toContain("hunter2");
+  mockInput.pressEnter();
+  f = await frame();
+  expect(f).toContain("Downloading 100%");
+  expect(f).toContain("Complete!");
+  expect(f).toContain("1 succeeded");
+  expect(f).not.toContain("Downloading  40%");
+  expect(calls.at(-1)?.argv).toEqual(["sudo", "-n", "dnf", "upgrade", "-y", "curl"]);
+  expect(calls.at(-1)?.input).toBeUndefined();
+
+  mockInput.pressEnter();
+  f = await frame();
+  expect(f).not.toContain("1 succeeded");
+  expect(scans).toBe(scansBefore + 1);
+});
+
+test("k twice kills a stuck command in the update panel", async () => {
+  const stuck: ScanResult = {
+    ...result,
+    packages: [
+      {
+        manager: "bun",
+        name: "vercel",
+        installed: "1.0.0",
+        latest: "2.0.0",
+        status: "outdated",
+        updateCmd: ["bun", "install", "-g", "vercel@latest"],
+      },
+    ],
+  };
+  const spawn: TuiDeps["spawn"] = (_argv, { onText, signal }) =>
+    new Promise((resolve) => {
+      onText?.("Resolving dependencies\n");
+      signal?.addEventListener("abort", () => resolve(143));
+    });
+  const { mockInput, frame } = await mount(120, 30, async () => stuck, {
+    spawn,
+    loadSnapshot: async () => ({ result: stuck, ageMs: 60_000 }),
+  });
+  await frame();
+  mockInput.pressKey("u");
+  await frame();
+  mockInput.pressKey("y");
+  let f = await frame();
+  expect(f).toContain("Resolving dependencies");
+  expect(f).toContain("kill this command");
+
+  mockInput.pressKey("k");
+  f = await frame();
+  expect(f).toContain("Press k again to kill");
+  expect(f).not.toContain("succeeded");
+
+  mockInput.pressKey("k");
+  f = await frame();
+  expect(f).toContain("1 failed");
+  expect(f).toContain("killed");
 });

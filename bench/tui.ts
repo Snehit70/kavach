@@ -1,5 +1,6 @@
 import { createTestRenderer } from "@opentui/core/testing";
 import { runTui } from "../src/tui.ts";
+import { checkSecurity } from "../src/security.ts";
 import { loadSnapshot } from "../src/snapshot.ts";
 
 const W = Number(process.env.W ?? 140), H = Number(process.env.H ?? 45);
@@ -12,7 +13,10 @@ await runTui({}, {
   loadHistory: async () => [],
   scan: async () => new Promise(() => {}), // never resolves: steady "refreshing" state
   detectNerdFont: async () => process.env.ICONS === "1",
+  // SEC=1 runs the real (cached) advisory check instead of an empty report.
+  ...(process.env.SEC === "1" ? { security: checkSecurity } : {}),
 });
+if (process.env.SEC === "1") await Bun.sleep(Number(process.env.SEC_WAIT ?? 6000));
 await renderOnce();
 const time = async (label: string, n: number, fn: () => void | Promise<void>) => {
   const samples: number[] = [];

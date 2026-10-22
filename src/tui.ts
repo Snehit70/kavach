@@ -12,16 +12,40 @@ import {
 } from "@opentui/core";
 import { batchUpdates, validateUpdateCmd } from "./batch";
 import { copyToClipboard } from "./clipboard";
+import { loadConfig } from "./config";
 import { diffScans } from "./diff";
 import { applyFilter, type FilterHit, type ParsedFilter, packageBump, parseFilter } from "./filter";
 import { appendHistory, loadHistory } from "./history";
 import { openUrl, packageUrl } from "./links";
 import { detectNerdFont, loadPrefs, savePrefs, type TuiPrefs } from "./prefs";
+import {
+  OutputLog,
+  runSteps,
+  type Spawner,
+  type Step,
+  spawnStreaming,
+  sudoReady,
+  sudoUnlock,
+  usesSudo,
+} from "./runner";
 import { type ScanResult, scan } from "./scanner";
+import {
+  type CheckOptions,
+  checkSecurity,
+  formatDuration,
+  formatPercent,
+  needsAttention,
+  type PackageSecurity,
+  riskScore,
+  type SecurityReport,
+  securityKey,
+  type Verdict,
+} from "./security";
 import { loadSnapshot } from "./snapshot";
 import { cyclesSortKey, type SortDir, type SortKey, sortPackages } from "./sort";
 import type { Package, Status } from "./types";
-import type { Bump } from "./util";
+import { type Bump, cmpVersions } from "./util";
+import type { Severity } from "./vuln";
 
 // ─── Theme ──────────────────────────────────────────────────────────────────
 
@@ -232,8 +256,7 @@ interface Glyphs {
   term: string;
   asc: string;
   desc: string;
-  capL: string;
-  capR: string;
+  shield: string;
 }
 
 const NERD: Glyphs = {
@@ -246,8 +269,7 @@ const NERD: Glyphs = {
   term: "", // cod-terminal
   asc: "", // oct-sort_asc
   desc: "", // oct-sort_desc
-  capL: "", // powerline left half circle
-  capR: "",
+  shield: "\uf132", // fa-shield
 };
 
 const PLAIN: Glyphs = {
@@ -260,8 +282,7 @@ const PLAIN: Glyphs = {
   term: "$",
   asc: "↑",
   desc: "↓",
-  capL: "",
-  capR: "",
+  shield: "▲",
 };
 
 const MANAGER_ICONS: Record<string, string> = {
@@ -291,7 +312,28 @@ const STATUS_GLYPH: Record<Status, string> = {
   unknown: "◌",
 };
 
-const VIEWS = ["all", "outdated", "major", "minor", "patch", "unknown", "marked"] as const;
+/** Replaces the status glyph on rows that need a security decision. */
+const SECURITY_GLYPH = { malware: "✖", vuln: "▲", hold: "‖" };
+
+const VERDICT_LABEL: Record<Verdict, string> = {
+  malware: "MALICIOUS",
+  fix: "FIX AVAILABLE",
+  nofix: "NO FIX YET",
+  hold: "HOLD",
+  ok: "OK",
+  na: "NOT CHECKED",
+};
+
+const VIEWS = [
+  "all",
+  "security",
+  "outdated",
+  "major",
+  "minor",
+  "patch",
+  "unknown",
+  "marked",
+] as const;
 type View = (typeof VIEWS)[number];
 const VIEW_LABEL: Record<View, [string, string]> = {
   all: ["All", "All"],
@@ -300,8 +342,45 @@ const VIEW_LABEL: Record<View, [string, string]> = {
   minor: ["Minor", "Min"],
   patch: ["Patch", "Pat"],
   unknown: ["Unknown", "Unk"],
+  security: ["Security", "Sec"],
   marked: ["Marked", "Mrk"],
 };
+
+/** Triage order: what to act on first, then ordinary updates by size. */
+const SECTIONS = [
+  "urgent",
+  "security",
+  "major",
+  "minor",
+  "patch",
+  "other",
+  "unknown",
+  "current",
+] as const;
+type Section = (typeof SECTIONS)[number];
+const SECTION_RANK = Object.fromEntries(SECTIONS.map((s, i) => [s, i])) as Record<Section, number>;
+const SECTION_LABEL: Record<Section, [string, string]> = {
+  urgent: ["Fix now", "malicious, exploited, critical or high"],
+  security: ["Security", "moderate or low, no fix yet, or hold"],
+  major: ["Major updates", "may break things"],
+  minor: ["Minor updates", "new features"],
+  patch: ["Patch updates", "bug fixes"],
+  other: ["Other updates", "unrecognised version scheme"],
+  unknown: ["Unknown", "no version info"],
+  current: ["Up to date", ""],
+};
+
+/** Exploited, malicious or high-severity findings worth acting on today. */
+function isUrgent(s: PackageSecurity): boolean {
+  if (!needsAttention(s) || s.verdict === "hold") return false;
+  return s.verdict === "malware" || s.kev || s.severity === "critical" || s.severity === "high";
+}
+
+function sectionGlyph(s: Section): string {
+  if (s === "urgent" || s === "security") return SECURITY_GLYPH.vuln;
+  if (s === "unknown") return STATUS_GLYPH.unknown;
+  return s === "current" ? STATUS_GLYPH["up-to-date"] : STATUS_GLYPH.outdated;
+}
 
 type FlashKind = "info" | "ok" | "warn" | "error";
 
@@ -310,13 +389,36 @@ const SIDE_PANEL_MIN_WIDTH = 130;
 const SIDE_MIN = 44;
 /** Bottom detail strip: frame + three lines. */
 const DETAIL_H = 5;
+/** Header bar plus security banner. */
+const TOP_H = 2;
 /** Table chrome inside the main row: top border, filter, rule, head, rule, bottom border. */
 const TABLE_CHROME = 6;
 const BUMP_W = 7;
-const FILTER_PLACEHOLDER = "filter   pip rich · :major · :m=npm · :s=unknown";
+const FILTER_PLACEHOLDER = "filter   pip rich · :major · :m=npm · :vuln · :hold";
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const BOLD = TextAttributes.BOLD;
 const ITALIC = TextAttributes.ITALIC;
+
+/** An update run shown in the overlay: sudo password, then live progress. */
+interface Job {
+  title: string;
+  phase: "checking" | "auth" | "running" | "done";
+  steps: Step[];
+  log: OutputLog;
+  /** Password being typed; cleared as soon as it is checked. */
+  secret: string;
+  authError?: string;
+  attempts: number;
+  startedAt?: number;
+  endedAt?: number;
+  stopRequested: boolean;
+  /** When `k` was pressed once; a second press within KILL_CONFIRM_MS kills. */
+  killArmedAt?: number;
+}
+
+const KILL_CONFIRM_MS = 3000;
+/** No output for this long marks the running command as quiet. */
+const QUIET_MS = 20_000;
 
 interface UiState {
   packages: Package[];
@@ -335,7 +437,11 @@ interface UiState {
     title: string;
     packages: number;
     cmds: { cmd: string[]; manager: string; count: number }[];
+    /** Security problems with what this update installs. */
+    warnings: string[];
+    notes: string[];
   };
+  job?: Job;
   flash?: { text: string; kind: FlashKind };
   showErrors: boolean;
   showHelp: boolean;
@@ -347,6 +453,10 @@ interface UiState {
   scrollTop: number;
   /** Epoch ms of the data currently shown (snapshot time or last scan). */
   lastScanAt?: number;
+  security?: SecurityReport;
+  securityChecking: boolean;
+  securityMessage: string;
+  securityError?: string;
 }
 
 type ViewCounts = Record<View, number>;
@@ -359,7 +469,8 @@ interface ManagerSummary {
 
 type LogicalRow =
   | { kind: "package"; hitIndex: number }
-  | { kind: "group"; manager: string; count: number; outdated: number; unknown: number };
+  | { kind: "group"; manager: string; count: number; outdated: number; unknown: number }
+  | { kind: "section"; section: Section; count: number };
 
 // ─── Chunk helpers ──────────────────────────────────────────────────────────
 
@@ -444,10 +555,24 @@ function trunc(s: string, n: number): string {
   return `${s.slice(0, Math.max(0, n - 1))}…`;
 }
 
-/** A rounded "pill" like a powerline segment; square padding without icons. */
-function pill(text: string, fg: string, bg: string, outer: string): TextChunk[] {
-  if (!icons) return [chunk(` ${text} `, fg, bg, BOLD)];
-  return [chunk(G.capL, bg, outer), chunk(text, fg, bg, BOLD), chunk(G.capR, bg, outer)];
+/** A square label block: the text padded by one cell on a solid background. */
+function pill(text: string, fg: string, bg: string): TextChunk[] {
+  return [chunk(` ${text} `, fg, bg, BOLD)];
+}
+
+/** RPM epochs ("3:11.8.8-3") only order releases; hide one the installed
+ *  version doesn't show so the two read side by side. */
+export function latestLabel(installed: string | undefined, latest: string): string {
+  const m = /^\d+:/.exec(latest);
+  return m && !installed?.includes(":") ? latest.slice(m[0].length) : latest;
+}
+
+/** Several installed versions ("2.7.4 2.7.5") show as the newest plus a count. */
+export function installedLabel(installed: string | undefined): string {
+  if (!installed) return "";
+  const parts = installed.split(/\s+/).filter(Boolean);
+  if (parts.length <= 1) return installed;
+  return `${parts[parts.length - 1]} +${parts.length - 1}`;
 }
 
 function bumpColor(bump: Bump): string {
@@ -471,6 +596,39 @@ function statusColor(p: Package): string {
 }
 
 /** Produce styled chunks for a string with fuzzy-match positions highlighted. */
+function sectionColor(s: Section): string {
+  if (s === "urgent") return T.major;
+  if (s === "security") return T.minor;
+  if (s === "major" || s === "minor" || s === "patch") return bumpColor(s);
+  if (s === "unknown") return T.unknown;
+  return s === "current" ? T.upToDate : T.subtext;
+}
+
+function severityColor(s: Severity): string {
+  if (s === "critical") return T.major;
+  if (s === "high") return T.minor;
+  if (s === "moderate") return T.patch;
+  if (s === "low") return T.subtext;
+  return T.overlay1;
+}
+
+/** Row marker for packages that need a security decision. */
+function securityMark(s: PackageSecurity | undefined): [string, string] | undefined {
+  if (!s || !needsAttention(s)) return undefined;
+  if (s.verdict === "malware") return [SECURITY_GLYPH.malware, T.major];
+  if (s.verdict === "hold")
+    return [SECURITY_GLYPH.hold, s.severity === "unknown" ? T.accent2 : severityColor(s.severity)];
+  return [SECURITY_GLYPH.vuln, severityColor(s.severity)];
+}
+
+function verdictColor(s: PackageSecurity): string {
+  if (s.verdict === "malware") return T.major;
+  if (s.verdict === "ok") return T.upToDate;
+  if (s.verdict === "na") return T.overlay0;
+  if (s.verdict === "hold" && s.severity === "unknown") return T.accent2;
+  return severityColor(s.severity);
+}
+
 function highlightedChunks(
   text: string,
   positions: number[] | undefined,
@@ -582,7 +740,10 @@ function measureColumns(pkgs: Iterable<Package>): ColumnWidths {
   let manager = 7;
   for (const pkg of pkgs) {
     names.push(pkg.name.length);
-    versions.push(pkg.installed?.length ?? 0, pkg.latest?.length ?? 0);
+    versions.push(
+      installedLabel(pkg.installed).length,
+      pkg.latest ? latestLabel(pkg.installed, pkg.latest).length : 0,
+    );
     if (pkg.manager.length > manager) manager = pkg.manager.length;
   }
   // Size to the 95th percentile so one 80-char name doesn't push every
@@ -677,10 +838,35 @@ export interface TuiDeps {
   loadPrefs?: typeof loadPrefs;
   savePrefs?: typeof savePrefs;
   detectNerdFont?: typeof detectNerdFont;
+  security?: (packages: Package[], opts: CheckOptions) => Promise<SecurityReport>;
+  /** Runs update commands; tests pass a fake. */
+  spawn?: Spawner;
 }
+
+const emptyReport = (): SecurityReport => ({
+  checkedAt: Date.now(),
+  packages: new Map(),
+  counts: {
+    affected: 0,
+    critical: 0,
+    high: 0,
+    moderate: 0,
+    low: 0,
+    malware: 0,
+    fix: 0,
+    nofix: 0,
+    hold: 0,
+    kev: 0,
+  },
+  checked: 0,
+  failed: 0,
+  notCovered: 0,
+  errors: [],
+});
 
 export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {}) {
   const injected = !!deps.renderer;
+  const spawnCmd = deps.spawn ?? spawnStreaming;
   // Headless runs (tests, benchmarks) never read or write the user's prefs.
   const prefsLoader =
     deps.loadPrefs ?? (injected ? async (): Promise<TuiPrefs> => ({}) : loadPrefs);
@@ -699,6 +885,15 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
       exitOnCtrlC: true,
     }));
   const runScan = deps.scan ?? scan;
+  // Headless runs never touch the network for advisories.
+  const runSecurity =
+    deps.security ??
+    (injected
+      ? async () => emptyReport()
+      : async (packages: Package[], o: CheckOptions) => {
+          const config = await loadConfig().catch(() => undefined);
+          return checkSecurity(packages, { ...o, cooldownDays: config?.cooldownDays });
+        });
 
   const [snap, historyList, prefs, nerd] = await Promise.all([snapP, historyP, prefsP, fontP]);
   T = THEMES.find((t) => t.name === prefs.theme) ?? THEMES[0]!;
@@ -733,9 +928,13 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
     groupByManager: prefs.groupByManager ?? false,
     scrollTop: 0,
     lastScanAt: snap ? Date.now() - snap.ageMs : undefined,
+    securityChecking: false,
+    securityMessage: "",
   };
 
   const pkgKey = (p: Package): string => `${p.manager}\x00${p.name}`;
+  const secOf = (p: Package): PackageSecurity | undefined =>
+    state.security?.packages.get(securityKey(p));
 
   // Theme and icons are saved only once chosen, so a new default theme or a
   // newly installed Nerd Font still takes effect for everyone else.
@@ -774,15 +973,16 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
   };
   if (!injected) {
     for (const sig of ["SIGTERM", "SIGHUP"] as const) process.on(sig, () => shutdown(0));
-    process.on("uncaughtException", (err) => shutdown(1, `pkgstate: ${err.stack ?? err}`));
+    process.on("uncaughtException", (err) => shutdown(1, `kavach: ${err.stack ?? err}`));
     process.on("unhandledRejection", (err) =>
-      shutdown(1, `pkgstate: ${err instanceof Error ? (err.stack ?? err.message) : err}`),
+      shutdown(1, `kavach: ${err instanceof Error ? (err.stack ?? err.message) : err}`),
     );
   }
 
   // ── Layout ────────────────────────────────────────────────────────────────
   //
   //   header bar
+  //   security banner
   //   ╭─ tabs ───────────────── sort ─╮╭─ Details ──────╮
   //   │ / filter                 n/m │││                │
   //   ├────────┬──────┬──────────┬────┤│                │
@@ -810,6 +1010,15 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
   });
   header.add(headerText);
   root.add(header);
+
+  const secBar = new BoxRenderable(renderer, { id: "secBar", height: 1 });
+  const secText = new TextRenderable(renderer, {
+    id: "secText",
+    content: "",
+    wrapMode: "none",
+  });
+  secBar.add(secText);
+  root.add(secBar);
 
   const mainRow = new BoxRenderable(renderer, {
     id: "mainRow",
@@ -927,6 +1136,7 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
     renderer.setBackgroundColor(T.base);
     root.backgroundColor = T.base;
     header.backgroundColor = T.mantle;
+    secBar.backgroundColor = T.mantle;
     footer.backgroundColor = T.mantle;
     for (const b of [mainRow, tableBox, filterRow, sideBox, detailBox]) b.backgroundColor = T.base;
     filterInput.backgroundColor = T.base;
@@ -954,6 +1164,7 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
 
   let cachedFiltered: FilterHit[] | null = null;
   let cachedCounts: ViewCounts | null = null;
+  let cachedFixes: Package[] | null = null;
   let cachedHits: FilterHit[] | null = null;
   let cachedLogicalRows: LogicalRow[] | null = null;
   let cachedGroupSummaries: Map<string, ManagerSummary> | null = null;
@@ -985,13 +1196,15 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
         return p.status === "outdated" && packageBump(p) === view;
       case "unknown":
         return p.status === "unknown";
+      case "security":
+        return needsAttention(secOf(p));
       case "marked":
         return state.marked.has(pkgKey(p));
     }
   };
 
   const filtered = (): FilterHit[] => {
-    cachedFiltered ??= applyFilter(state.filter, state.packages);
+    cachedFiltered ??= applyFilter(state.filter, state.packages, secOf);
     return cachedFiltered;
   };
 
@@ -1005,6 +1218,7 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
       minor: 0,
       patch: 0,
       unknown: 0,
+      security: 0,
       marked: 0,
     };
     for (const { pkg } of filtered()) {
@@ -1014,6 +1228,7 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
         const b = packageBump(pkg);
         if (b !== "other") c[b]++;
       } else if (pkg.status === "unknown") c.unknown++;
+      if (state.security && needsAttention(secOf(pkg))) c.security++;
       if (state.marked.size > 0 && state.marked.has(pkgKey(pkg))) c.marked++;
     }
     cachedCounts = c;
@@ -1029,6 +1244,7 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
       minor: 0,
       patch: 0,
       unknown: 0,
+      security: 0,
       marked: 0,
     };
     let current = 0;
@@ -1056,6 +1272,28 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
     return cachedManagerColors.get(m) ?? T.accent;
   };
 
+  const sectionOf = (p: Package): Section => {
+    const s = secOf(p);
+    if (s && needsAttention(s)) return isUrgent(s) ? "urgent" : "security";
+    if (p.status === "outdated") return packageBump(p);
+    return p.status === "unknown" ? "unknown" : "current";
+  };
+
+  /** Rows fall into triage sections with the default sort (and always in the
+   *  Security view); a text match or manager grouping orders them instead. */
+  const sectioned = (): boolean =>
+    !state.groupByManager &&
+    state.filter.tokens.length === 0 &&
+    (state.view === "security" || (state.sortKey === "status" && state.sortDir === "asc"));
+
+  /** Updatable security fixes in the filtered set, for `f`. */
+  const securityFixes = (): Package[] => {
+    cachedFixes ??= filtered()
+      .map((h) => h.pkg)
+      .filter((p) => p.status === "outdated" && !!p.updateCmd && secOf(p)?.verdict === "fix");
+    return cachedFixes;
+  };
+
   const visibleHits = (): FilterHit[] => {
     if (cachedHits) return cachedHits;
     const base = filtered();
@@ -1063,6 +1301,18 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
     // Re-sort unless we're already ranking by fuzzy score
     let final =
       state.filter.tokens.length > 0 ? hits : sortPackages(hits, state.sortKey, state.sortDir);
+    // Triage: security findings by risk, then updates by bump. Within a
+    // section the chosen sort holds (sort() is stable).
+    if (sectioned()) {
+      final = final
+        .map((h) => {
+          const sec = sectionOf(h.pkg);
+          const rank = SECTION_RANK[sec];
+          return { h, rank, risk: rank <= SECTION_RANK.security ? riskScore(secOf(h.pkg)) : 0 };
+        })
+        .sort((a, b) => a.rank - b.rank || b.risk - a.risk)
+        .map((x) => x.h);
+    }
     // Group mode: stable-partition by manager, preserving within-group order.
     if (state.groupByManager && final.length > 0) {
       const byMgr = new Map<string, FilterHit[]>();
@@ -1106,6 +1356,23 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
 
   const logicalRows = (hits: FilterHit[]): LogicalRow[] => {
     if (cachedLogicalRows) return cachedLogicalRows;
+    if (!state.groupByManager && sectioned()) {
+      const secs = hits.map((h) => sectionOf(h.pkg));
+      const counts = new Map<Section, number>();
+      for (const s of secs) counts.set(s, (counts.get(s) ?? 0) + 1);
+      // One section needs no header (the Major tab is all major updates).
+      if (counts.size > 1) {
+        const rows: LogicalRow[] = [];
+        secs.forEach((section, hitIndex) => {
+          if (section !== secs[hitIndex - 1]) {
+            rows.push({ kind: "section", section, count: counts.get(section) ?? 0 });
+          }
+          rows.push({ kind: "package", hitIndex });
+        });
+        cachedLogicalRows = rows;
+        return rows;
+      }
+    }
     if (!state.groupByManager) {
       cachedLogicalRows = hits.map((_, hitIndex) => ({ kind: "package", hitIndex }));
       return cachedLogicalRows;
@@ -1136,6 +1403,7 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
   const invalidateFilter = () => {
     cachedFiltered = null;
     cachedCounts = null;
+    cachedFixes = null;
     cachedColumns = null;
     invalidateView();
   };
@@ -1168,11 +1436,12 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
   };
   const tableWidth = () => renderer.width - sideWidth();
   const bottomDetail = () => state.showDetail && sideWidth() === 0 && renderer.height >= 20;
-  const mainHeight = () => Math.max(1, renderer.height - 2 - (bottomDetail() ? DETAIL_H : 0));
+  const mainHeight = () =>
+    Math.max(1, renderer.height - TOP_H - 1 - (bottomDetail() ? DETAIL_H : 0));
   /** Package rows that fit; computed, not measured, so the first frame after
    *  a resize or detail toggle already has the right row count. */
   const tableBodyCapacity = (): number => Math.max(1, mainHeight() - TABLE_CHROME);
-  const overlayOpen = () => state.showHelp || state.showErrors || !!state.confirm;
+  const overlayOpen = () => state.showHelp || state.showErrors || !!state.confirm || !!state.job;
 
   const selectedLogicalIndex = (rows: LogicalRow[]): number =>
     rows.findIndex((row) => row.kind === "package" && row.hitIndex === state.selected);
@@ -1202,6 +1471,13 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
   };
   const moveSelected = (delta: number) => setSelected(state.selected + delta);
 
+  const rowMark = (p: Package, bg: string): TextChunk => {
+    const mark = securityMark(secOf(p));
+    return mark
+      ? chunk(mark[0], mark[1], bg, BOLD)
+      : chunk(STATUS_GLYPH[p.status], statusColor(p), bg);
+  };
+
   const naturalColumns = (): ColumnWidths => {
     // Measured over the filtered set, not the view, so switching tabs
     // doesn't shift the columns.
@@ -1216,7 +1492,7 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
     const bg = T.mantle;
     const left: TextChunk[] = [
       chunk(" ", undefined, bg),
-      ...pill(`${G.logo} pkgstate`, T.base, T.accent, bg),
+      ...pill(`${G.logo} kavach`, T.base, T.accent),
     ];
     if (state.packages.length > 0) {
       const h = health();
@@ -1256,7 +1532,7 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
     const errs = errorEntries();
     if (errs.length > 0) {
       right.push(
-        ...pill(`${G.warn} ${errs.length} error${errs.length > 1 ? "s" : ""}`, T.base, T.major, bg),
+        ...pill(`${G.warn} ${errs.length} error${errs.length > 1 ? "s" : ""}`, T.base, T.major),
         chunk(" e", T.overlay0),
         chunk("  "),
       );
@@ -1278,6 +1554,101 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
     headerText.content = new StyledText(spread(left, right, width));
   };
 
+  // ── Security banner ───────────────────────────────────────────────────────
+
+  const renderSecurityBar = () => {
+    const width = renderer.width;
+    const bg = T.mantle;
+    const r = state.security;
+    const c = r?.counts;
+    const worst = !c
+      ? T.surface2
+      : c.malware || c.critical
+        ? T.major
+        : c.high
+          ? T.minor
+          : c.moderate || c.low || c.affected
+            ? T.patch
+            : c.hold
+              ? T.accent2
+              : T.upToDate;
+    const left: TextChunk[] = [
+      chunk(" ", undefined, bg),
+      ...pill(`${G.shield} Security`, T.base, worst),
+      chunk("  "),
+    ];
+    const parts: TextChunk[][] = [];
+    if (c) {
+      const add = (n: number, label: string, color: string) => {
+        if (n > 0) parts.push([chunk(`${n}`, color, undefined, BOLD), chunk(` ${label}`, color)]);
+      };
+      add(c.malware, "malicious", T.major);
+      add(c.critical, "critical", T.major);
+      add(c.high, "high", T.minor);
+      add(c.moderate, "moderate", T.patch);
+      add(c.low, "low", T.subtext);
+      const unrated = c.affected - c.malware - c.critical - c.high - c.moderate - c.low;
+      add(unrated, "unrated", T.overlay1);
+      add(c.kev, "exploited", T.major);
+      add(c.hold, "hold", T.accent2);
+      if (parts.length === 0) {
+        parts.push([
+          chunk(`${G.check} `, T.upToDate, undefined, BOLD),
+          chunk(
+            r.checked > 0 ? `no known vulnerabilities in ${r.checked} checked` : "nothing checked",
+            T.subtext,
+          ),
+        ]);
+      }
+      if (r.notCovered) parts.push([chunk(`${r.notCovered} not covered`, T.overlay0)]);
+      if (r.failed) parts.push([chunk(`${G.warn} ${r.failed} lookups failed`, T.minor)]);
+    } else if (!state.securityChecking) {
+      parts.push([
+        chunk(
+          state.securityError ? `check failed: ${state.securityError}` : "not checked yet",
+          state.securityError ? T.major : T.overlay0,
+          undefined,
+          ITALIC,
+        ),
+      ]);
+    }
+    const right: TextChunk[] = [];
+    if (state.securityChecking) {
+      right.push(
+        chunk(`${SPINNER[spinnerFrame % SPINNER.length]} `, T.accent2),
+        chunk(trunc(state.securityMessage || "checking advisories", 34), T.overlay1),
+      );
+    } else if (r) {
+      right.push(chunk(`checked ${formatAge(Date.now() - r.checkedAt)} ago`, T.overlay0));
+    }
+    // The one thing to do about it, a key away.
+    const fixes = securityFixes().length;
+    if (fixes > 0) {
+      right.push(
+        chunk("  "),
+        ...pill("f", T.base, worst),
+        chunk(
+          width >= 120
+            ? ` install ${fixes} security fix${fixes === 1 ? "" : "es"}`
+            : ` fix ${fixes}`,
+          T.text,
+          undefined,
+          BOLD,
+        ),
+      );
+    }
+    right.push(chunk("  "), ...keyHints([["v", "view"]]), chunk(" "));
+    const room = width - chunksWidth(left) - chunksWidth(right) - 1;
+    const body: TextChunk[] = [];
+    for (const part of parts) {
+      const sepW = body.length ? 5 : 0;
+      if (chunksWidth(body) + sepW + chunksWidth(part) > room) break;
+      if (body.length) body.push(chunk("  ·  ", T.surface2));
+      body.push(...part);
+    }
+    secText.content = new StyledText(spread([...left, ...body], right, width));
+  };
+
   // ── Footer ────────────────────────────────────────────────────────────────
 
   const keyHints = (pairs: Array<[string, string]>): TextChunk[] => {
@@ -1291,10 +1662,31 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
 
   const renderFooter = () => {
     const width = renderer.width;
-    const bg = T.mantle;
     let mode: [string, string];
     let hints: Array<[string, string]>;
-    if (state.confirm) {
+    if (state.job) {
+      const p = state.job.phase;
+      mode =
+        p === "running"
+          ? ["UPDATING", T.accent]
+          : p === "done"
+            ? ["DONE", T.upToDate]
+            : ["SUDO", T.minor];
+      hints =
+        p === "auth"
+          ? [
+              ["Enter", "unlock"],
+              ["Esc", "cancel"],
+            ]
+          : p === "running"
+            ? [
+                ["Esc", "stop after this command"],
+                ["k", "kill this command"],
+              ]
+            : p === "done"
+              ? [["Enter", "close and rescan"]]
+              : [];
+    } else if (state.confirm) {
       mode = ["CONFIRM", T.minor];
       hints = [
         ["y", "run"],
@@ -1319,16 +1711,22 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
       hints = [
         ["?", "help"],
         ["/", "filter"],
-        ["⇥", "view"],
+        ["←→", "view"],
+        [
+          "[ ]",
+          logicalRows(visibleHits()).some((r) => r.kind === "section") ? "section" : "manager",
+        ],
         ["␣", "mark"],
         ["u", "update"],
         ["U", state.marked.size > 0 ? "update marked" : "update view"],
+        ...(securityFixes().length > 0 ? [["f", "update fixes"] as [string, string]] : []),
+        ["⏎", "details"],
         ["w", "open"],
         ["r", "rescan"],
         ["q", "quit"],
       ];
     }
-    const left: TextChunk[] = [chunk(" "), ...pill(mode[0], T.base, mode[1], bg), chunk("  ")];
+    const left: TextChunk[] = [chunk(" "), ...pill(mode[0], T.base, mode[1]), chunk("  ")];
     const right: TextChunk[] = [];
     if (state.flash) {
       const f = state.flash;
@@ -1357,7 +1755,9 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
     const sortLabel =
       state.filter.tokens.length > 0
         ? "by match"
-        : `${state.groupByManager ? "by manager, " : ""}${state.sortKey} ${state.sortDir === "asc" ? G.asc : G.desc}`;
+        : state.view === "security"
+          ? `${state.groupByManager ? "by manager, " : ""}by risk`
+          : `${state.groupByManager ? "by manager, " : ""}${state.sortKey} ${state.sortDir === "asc" ? G.asc : G.desc}`;
     const right: TextChunk[] = [chunk(` ${sortLabel} `, T.overlay1), chunk("─╮", bc)];
     const room = width - 2 - chunksWidth(right) - 1;
     const build = (short: boolean, onlyActive: boolean) => {
@@ -1370,7 +1770,7 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
         const label = VIEW_LABEL[v][short ? 1 : 0];
         const n = counts[v];
         const parts = active
-          ? pill(`${label} ${n}`, T.base, T.accent, T.base)
+          ? pill(`${label} ${n}`, T.base, T.accent)
           : [
               chunk(` ${label} `, n > 0 ? T.subtext : T.surface2),
               chunk(`${n} `, n > 0 ? T.overlay0 : T.surface2),
@@ -1538,6 +1938,27 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
 
     const sep = (bg?: string) => chunk(" │ ", T.grid, bg);
     shownRows.forEach((row, rowIdx) => {
+      if (row.kind === "section") {
+        const [title, desc] = SECTION_LABEL[row.section];
+        const color = sectionColor(row.section);
+        const label: TextChunk[] = [
+          chunk("─ ", T.grid),
+          chunk(`${sectionGlyph(row.section)} `, color, undefined, BOLD),
+          chunk(title, color, undefined, BOLD),
+          chunk(`  ${row.count}`, T.subtext),
+        ];
+        if (desc && inner >= 80) label.push(chunk(`  ${desc}`, T.overlay0, undefined, ITALIC));
+        label.push(chunk(" "));
+        const lw = chunksWidth(label);
+        const rest = ruleLine(
+          inner,
+          cols.seps.map((s) => s - lw),
+          "┼",
+        ).slice(0, Math.max(0, inner - lw));
+        lines.push([chunk("├", bc), ...label, chunk(rest, T.grid), rightEdge(rowIdx, "┤")]);
+        newMap.push(-1);
+        return;
+      }
       if (row.kind === "group") {
         const color = managerColor(row.manager);
         const icon = managerIcon(row.manager);
@@ -1577,7 +1998,7 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
       const line: TextChunk[] = [
         chunk(isSel ? "▌" : " ", T.accent, bg),
         chunk(isMarked ? G.check : " ", T.accent2, bg, BOLD),
-        chunk(STATUS_GLYPH[p.status], statusColor(p), bg),
+        rowMark(p, bg),
         chunk(" ", undefined, bg),
         ...highlightedChunks(name, hit.match?.positions, nameFg, bg, isSel ? BOLD : undefined),
         chunk(" ".repeat(Math.max(0, cols.name - name.length)), undefined, bg),
@@ -1594,14 +2015,14 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
           chunk(pad(p.manager, cols.manager - (icon ? 2 : 0)), repeat ? T.surface2 : mcolor, bg),
         );
       }
-      const installed = trunc(p.installed ?? "", cols.version);
+      const installed = trunc(installedLabel(p.installed), cols.version);
       line.push(
         sep(bg),
         chunk(padLeft(installed, cols.version), outdated || isSel ? T.text : T.overlay1, bg),
         chunk(outdated ? " → " : "   ", T.overlay0, bg),
       );
       if (outdated && p.latest) {
-        const latest = trunc(p.latest, cols.version);
+        const latest = trunc(latestLabel(p.installed, p.latest), cols.version);
         const [same, changed] = versionSplit(p.installed ?? "", latest);
         line.push(
           chunk(same, T.subtext, bg),
@@ -1700,6 +2121,69 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
     return out;
   };
 
+  const securitySection = (s: PackageSecurity, inner: number, height: number): TextChunk[][] => {
+    const out: TextChunk[][] = [];
+    const color = verdictColor(s);
+    out.push(sectionHeading("Security", inner, needsAttention(s) ? color : T.overlay1));
+    if (!needsAttention(s)) {
+      out.push(
+        s.verdict === "ok"
+          ? [chunk(`${G.check} `, T.upToDate, undefined, BOLD), chunk(s.reason, T.subtext)]
+          : [chunk(trunc(s.reason, inner), T.overlay0, undefined, ITALIC)],
+      );
+      return out;
+    }
+    const badges: TextChunk[] = [...pill(VERDICT_LABEL[s.verdict], T.base, color)];
+    if (s.severity !== "unknown") badges.push(chunk(`  ${s.severity}`, color, undefined, BOLD));
+    if (s.kev) badges.push(chunk("  "), ...pill("EXPLOITED", T.base, T.major));
+    if (s.epss !== undefined && s.epss >= 0.01)
+      badges.push(chunk(`  EPSS ${formatPercent(s.epss)}`, T.overlay1));
+    out.push(fitChunks(badges, inner));
+    for (const line of wrapText(s.reason, inner).slice(0, 3)) out.push([chunk(line, T.text)]);
+    if (s.target) {
+      out.push(
+        fitChunks(
+          [chunk(pad("safe target", 12), T.overlay1), chunk(s.target, T.upToDate, undefined, BOLD)],
+          inner,
+        ),
+      );
+    }
+    if (s.verdict === "hold" && s.latestPublished) {
+      out.push(
+        fitChunks(
+          [
+            chunk(pad("released", 12), T.overlay1),
+            chunk(`${formatDuration(Date.now() - Date.parse(s.latestPublished))} ago`, T.subtext),
+          ],
+          inner,
+        ),
+      );
+    }
+    // Leave the rest of the panel for the update command and link.
+    const room = Math.max(2, Math.floor((height - 22) / 2));
+    const list = [
+      ...s.advisories.map((a) => ({ a, latest: false })),
+      ...s.latestAdvisories.map((a) => ({ a, latest: true })),
+    ];
+    for (const { a, latest } of list.slice(0, room)) {
+      const tags: TextChunk[] = [
+        chunk("• ", severityColor(a.severity)),
+        chunk(a.id, severityColor(a.severity), undefined, BOLD),
+      ];
+      if (latest) tags.push(chunk("  in latest", T.minor));
+      if (a.kev) tags.push(chunk("  exploited", T.major, undefined, BOLD));
+      if (a.fixed) tags.push(chunk(`  fixed ${a.fixed}`, T.overlay1));
+      out.push(fitChunks(tags, inner));
+      if (a.summary) out.push([chunk(`  ${trunc(a.summary, inner - 2)}`, T.overlay1)]);
+    }
+    if (list.length > room) {
+      out.push([
+        chunk(`… ${list.length - room} more · kavach vulns`, T.overlay0, undefined, ITALIC),
+      ]);
+    }
+    return out;
+  };
+
   const renderSide = (width: number, height: number) => {
     const inner = Math.max(1, width - 4);
     const hit = visibleHits()[state.selected];
@@ -1748,6 +2232,16 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
       if (state.marked.has(pkgKey(p)))
         field("", [chunk(`${G.check} marked`, T.accent2, undefined, BOLD)]);
       blank();
+
+      const sec = secOf(p);
+      if (sec) {
+        out.push(...securitySection(sec, inner, height));
+        blank();
+      } else if (state.securityChecking) {
+        out.push(sectionHeading("Security", inner));
+        out.push([chunk("checking…", T.overlay0, undefined, ITALIC)]);
+        blank();
+      }
 
       out.push(sectionHeading("Update", inner));
       if (p.updateCmd) {
@@ -1928,13 +2422,27 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
             ),
           ]
       : [];
+    const sec = secOf(p);
+    const secLine: TextChunk[] | undefined =
+      sec && needsAttention(sec)
+        ? [
+            chunk(`${securityMark(sec)?.[0] ?? ""} `, verdictColor(sec), undefined, BOLD),
+            chunk(VERDICT_LABEL[sec.verdict], verdictColor(sec), undefined, BOLD),
+            chunk(`  ${sec.reason}`, T.text),
+          ]
+        : undefined;
     detailText.content = new StyledText(
       framed(
         [
-          chunk(`${STATUS_GLYPH[p.status]} `, statusColor(p)),
+          rowMark(p, T.base),
+          chunk(" "),
           chunk(trunc(p.name, Math.max(4, width - 10)), T.bright, undefined, BOLD),
         ],
-        [fitChunks(line1, inner), spread(line2, hints, inner), spread(line3, scanInfo, inner)],
+        [
+          fitChunks(line1, inner),
+          spread(line2, hints, inner),
+          secLine ? fitChunks(secLine, inner) : spread(line3, scanInfo, inner),
+        ],
         width,
         DETAIL_H,
       ),
@@ -1960,8 +2468,8 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
         ["g G", "top / bottom"],
         ["PgUp PgDn", "page up / down"],
         ["^u ^d", "half page"],
-        ["[ ]", "previous / next manager"],
-        ["n N", "next / previous outdated"],
+        ["[ ]", "previous / next section"],
+        ["n N", "next / previous to act on"],
         ["z", "center the selection"],
         ["mouse", "click rows, tabs and headers"],
       ],
@@ -1969,8 +2477,9 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
     [
       "View & filter",
       [
-        ["Tab ⇧Tab", "next / previous view"],
+        ["← → Tab", "previous / next view"],
         ["o", "outdated view on / off"],
+        ["v", "security view on / off"],
         ["/", "filter: text, :major, :m=npm"],
         ["c", "clear filter"],
         ["s S", "cycle sort / reverse"],
@@ -1987,6 +2496,7 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
         ["Esc", "clear marks › filter › view"],
         ["u", "update selected"],
         ["U", "update marked (else whole view)"],
+        ["f", "install every security fix"],
       ],
     ],
     [
@@ -1996,7 +2506,8 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
         ["Y", "copy update command(s)"],
         ["w", "open package page"],
         ["r", "rescan now"],
-        ["d", "details panel on / off"],
+        ["V", "re-check vulnerabilities"],
+        ["Enter d", "details panel on / off"],
         ["e", "adapter errors"],
         ["t", "next theme"],
         ["I", "Nerd Font icons on / off"],
@@ -2026,7 +2537,188 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
     return out;
   };
 
+  const clock = (ms: number) => {
+    const s = Math.max(0, Math.floor(ms / 1000));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  };
+
+  const stepGlyph = (s: Step): [string, string] => {
+    switch (s.status) {
+      case "running":
+        return [SPINNER[spinnerFrame % SPINNER.length] ?? "•", T.accent];
+      case "ok":
+        return [G.check, T.upToDate];
+      case "failed":
+        return [G.cross, T.major];
+      case "skipped":
+        return ["–", T.overlay0];
+      default:
+        return ["○", T.overlay0];
+    }
+  };
+
+  const killArmed = (job: Job) =>
+    job.killArmedAt !== undefined && Date.now() - job.killArmedAt < KILL_CONFIRM_MS;
+
+  const renderJob = (job: Job) => {
+    const { width, height } = layoutOverlay(renderer.height - 2, 120);
+    const inner = width - 6;
+    overlay.visible = true;
+    overlay.title = ` ${job.title} `;
+    const steps = job.steps;
+    const count = (st: Step["status"]) => steps.filter((s) => s.status === st).length;
+    const ok = count("ok");
+    const failed = count("failed");
+    const skipped = count("skipped");
+    const finished = ok + failed + skipped;
+    const lines: TextChunk[][] = [];
+
+    const barW = Math.max(10, Math.min(40, inner - 34));
+    const filled = Math.round((finished / Math.max(1, steps.length)) * barW);
+    const elapsed = job.startedAt ? clock((job.endedAt ?? Date.now()) - job.startedAt) : "";
+    lines.push([
+      chunk("━".repeat(filled), failed ? T.minor : T.upToDate),
+      chunk("─".repeat(barW - filled), T.surface2),
+      chunk(`  ${finished}/${steps.length}`, T.bright, undefined, BOLD),
+      chunk(` command${steps.length === 1 ? "" : "s"}`, T.text),
+      chunk(elapsed ? `  ·  ${elapsed}` : "", T.overlay1),
+    ]);
+    lines.push([]);
+
+    const maxSteps = Math.max(1, Math.min(steps.length, Math.floor((height - 12) / 2)));
+    const cur = steps.findIndex((s) => s.status === "running" || s.status === "pending");
+    const start = Math.max(
+      0,
+      Math.min((cur < 0 ? steps.length : cur) - 1, steps.length - maxSteps),
+    );
+    const cmdW = Math.max(10, inner - 31);
+    for (const s of steps.slice(start, start + maxSteps)) {
+      const [glyph, color] = stepGlyph(s);
+      const quiet = Date.now() - job.log.lastAt;
+      const right =
+        s.status === "running" && quiet >= QUIET_MS
+          ? `quiet ${clock(quiet)}`
+          : s.killed
+            ? "killed"
+            : s.status === "failed"
+              ? `exit ${s.code}`
+              : s.status === "skipped"
+                ? "skipped"
+                : s.ms !== undefined
+                  ? formatMs(s.ms)
+                  : "";
+      lines.push(
+        fitChunks(
+          [
+            chunk(`${glyph} `, color, undefined, BOLD),
+            chunk(pad(s.manager, 8), managerColor(s.manager), undefined, BOLD),
+            chunk(padLeft(`×${s.count}`, 5), T.overlay1),
+            chunk("  $ ", T.overlay0),
+            chunk(
+              pad(trunc(s.cmd.join(" "), cmdW), cmdW),
+              s.status === "pending" ? T.overlay1 : T.text,
+            ),
+            chunk(
+              padLeft(right, 10),
+              s.status === "failed" ? T.major : s.status === "running" ? T.minor : T.overlay0,
+            ),
+          ],
+          inner,
+        ),
+      );
+    }
+    if (steps.length > maxSteps)
+      lines.push([
+        chunk(`  ${steps.length - maxSteps} more not shown`, T.overlay0, undefined, ITALIC),
+      ]);
+    lines.push([]);
+
+    if (
+      job.phase === "auth" ||
+      (job.phase === "checking" && job.attempts + job.secret.length > 0)
+    ) {
+      const managers = [...new Set(steps.filter((s) => usesSudo(s.cmd)).map((s) => s.manager))];
+      lines.push(
+        [chunk("sudo password", T.bright, undefined, BOLD)],
+        [
+          chunk(
+            `${managers.join(", ")} needs root. The password goes to sudo only and isn't kept.`,
+            T.subtext,
+          ),
+        ],
+        [],
+      );
+      const field = 34;
+      const dots = "•".repeat(Math.min(job.secret.length, field - 2));
+      const checking = job.phase === "checking";
+      lines.push([
+        chunk(" "),
+        chunk(pad(` ${dots}${checking ? "" : "▏"}`, field), T.bright, T.surface0, BOLD),
+        chunk(
+          checking ? "  checking…" : job.authError ? `  ${job.authError}` : "",
+          job.authError && !checking ? T.major : T.overlay1,
+        ),
+      ]);
+      lines.push(
+        [],
+        keyHints([
+          ["Enter", "unlock"],
+          ["Esc", "cancel"],
+        ]),
+      );
+    } else if (job.phase === "checking") {
+      lines.push([chunk(`${SPINNER[spinnerFrame % SPINNER.length]} checking sudo…`, T.overlay1)]);
+    } else {
+      const room = Math.max(1, height - 3 - lines.length - 4);
+      lines.push([chunk("OUTPUT", T.overlay1, undefined, BOLD)]);
+      const tail = job.log.tail(room);
+      for (const l of tail) {
+        const header = /^\[\d+\/\d+\] \$ /.test(l);
+        lines.push([
+          chunk(trunc(l, inner), header ? T.accent : T.subtext, undefined, header ? BOLD : 0),
+        ]);
+      }
+      for (let i = tail.length; i < room; i++) lines.push([]);
+      lines.push([]);
+      if (job.phase === "done") {
+        lines.push([
+          chunk(`${G.check} ${ok} succeeded`, ok ? T.upToDate : T.overlay1, undefined, BOLD),
+          chunk(failed ? `   ${G.cross} ${failed} failed` : "", T.major, undefined, BOLD),
+          chunk(skipped ? `   ${skipped} skipped` : "", T.overlay1),
+          chunk("     "),
+          ...keyHints([["Enter", "close and rescan"]]),
+        ]);
+      } else if (killArmed(job)) {
+        const running = steps.find((s) => s.status === "running");
+        lines.push([
+          chunk("Press k again to kill ", T.minor, undefined, BOLD),
+          chunk(running?.manager ?? "the command", T.bright, undefined, BOLD),
+          chunk(
+            running && usesSudo(running.cmd)
+              ? ". Interrupting a system package manager can leave its lock or database to clean up."
+              : ". The rest of the batch carries on.",
+            T.subtext,
+          ),
+        ]);
+      } else {
+        const quiet = Date.now() - job.log.lastAt >= QUIET_MS;
+        lines.push([
+          ...(job.stopRequested
+            ? [chunk("stopping after this command…   ", T.minor, undefined, ITALIC)]
+            : keyHints([["Esc", "stop after this command"]])),
+          chunk("   "),
+          ...keyHints([["k", quiet ? "kill it, it looks stuck" : "kill this command"]]),
+        ]);
+      }
+    }
+    overlayText.content = new StyledText(joinLines(lines));
+  };
+
   const renderOverlay = () => {
+    if (state.job) {
+      renderJob(state.job);
+      return;
+    }
     if (state.showHelp) {
       const colWidth = 44;
       const two = renderer.width >= 2 * colWidth + 14;
@@ -2037,7 +2729,7 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
         [],
         [
           chunk("filter scopes ", T.overlay0, undefined, ITALIC),
-          chunk(":outdated :major :minor :patch :m=npm :s=unknown", T.subtext),
+          chunk(":outdated :major :m=npm :vuln :hold :kev :fix :nofix", T.subtext),
         ],
       );
       overlay.visible = true;
@@ -2073,8 +2765,11 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
       return;
     }
     const c = state.confirm;
-    const maxCmds = Math.max(1, Math.min(c.cmds.length, renderer.height - 14));
-    const { width } = layoutOverlay(maxCmds + 9, 110);
+    const warnLines = Math.min(c.warnings.length, 4);
+    const extra =
+      (warnLines ? warnLines + 2 + (c.warnings.length > 4 ? 1 : 0) : 0) + c.notes.length;
+    const maxCmds = Math.max(1, Math.min(c.cmds.length, renderer.height - 14 - extra));
+    const { width } = layoutOverlay(maxCmds + 9 + extra, 110);
     const inner = width - 6;
     overlay.visible = true;
     overlay.title = ` ${c.title} `;
@@ -2107,11 +2802,21 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
     if (c.cmds.length > maxCmds) {
       lines.push([chunk(`… and ${c.cmds.length - maxCmds} more`, T.overlay0, undefined, ITALIC)]);
     }
+    if (warnLines) {
+      lines.push([], [chunk(`${G.warn} Security`, T.minor, undefined, BOLD)]);
+      for (const w of c.warnings.slice(0, warnLines))
+        lines.push(fitChunks([chunk("  "), chunk(w, T.text)], inner));
+      if (c.warnings.length > warnLines)
+        lines.push([
+          chunk(`  … and ${c.warnings.length - warnLines} more`, T.overlay0, undefined, ITALIC),
+        ]);
+    }
+    for (const n of c.notes) lines.push([chunk(n, T.overlay1, undefined, ITALIC)]);
     lines.push(
       [],
       [
         chunk(
-          "pkgstate pauses, runs these in this terminal, then rescans.",
+          "Runs here with live output (sudo asks for your password first), then rescans.",
           T.overlay1,
           undefined,
           ITALIC,
@@ -2119,9 +2824,9 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
       ],
       [],
       [
-        ...pill("y  run", T.base, T.upToDate, T.mantle),
+        ...pill("y  run", T.base, T.upToDate),
         chunk("   "),
-        ...pill("n  cancel", T.base, T.surface2, T.mantle),
+        ...pill("n  cancel", T.base, T.surface2),
       ],
     );
     overlayText.content = new StyledText(joinLines(lines));
@@ -2129,6 +2834,7 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
 
   const renderAll = () => {
     renderHeader();
+    renderSecurityBar();
     renderFooter();
     renderTable();
     renderDetail();
@@ -2207,10 +2913,14 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
   // Xm ago" honest. Both repaint just the header.
   let spinnerFrame = 0;
   let spinnerTimer: ReturnType<typeof setInterval> | null = null;
-  const ageTimer = setInterval(() => renderHeader(), 30_000);
+  const ageTimer = setInterval(() => {
+    renderHeader();
+    renderSecurityBar();
+  }, 30_000);
   stopTimers = () => {
     clearInterval(ageTimer);
     stopSpinner();
+    stopJobTimer();
     if (prewarmTimer) clearTimeout(prewarmTimer);
     if (flashTimer) clearTimeout(flashTimer);
   };
@@ -2218,7 +2928,8 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
     if (spinnerTimer) return;
     spinnerTimer = setInterval(() => {
       spinnerFrame++;
-      renderHeader();
+      if (state.scanning) renderHeader();
+      if (state.securityChecking) renderSecurityBar();
     }, 100);
   };
   const stopSpinner = () => {
@@ -2242,6 +2953,70 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
     if (d.removed.length) parts.push(`${d.removed.length} removed`);
     if (parts.length === 1) parts.push("no changes");
     return parts.join(" · ");
+  };
+
+  /** Any key since launch; until then a fresh report may move the cursor. */
+  let touched = false;
+  /** The first report's "fixes ready" prompt has been shown. */
+  let announced = false;
+  /** Single flight; a request while one runs queues one more pass. */
+  let securityInFlight = false;
+  let securityQueued: boolean | null = null;
+  const doSecurity = async (refresh = false): Promise<void> => {
+    if (securityInFlight) {
+      securityQueued = (securityQueued ?? false) || refresh;
+      return;
+    }
+    if (state.packages.length === 0) return;
+    securityInFlight = true;
+    state.securityChecking = true;
+    state.securityMessage = refresh ? "re-checking advisories" : "checking advisories";
+    startSpinner();
+    renderSecurityBar();
+    try {
+      const report = await runSecurity(state.packages, {
+        refresh,
+        onProgress: (m) => {
+          state.securityMessage = m;
+        },
+      });
+      const first = !state.security;
+      state.security = report;
+      state.securityError = undefined;
+      invalidateFilter();
+      if (first && !touched) {
+        // Untouched since launch: land on the top of the new triage order.
+        anchorKey = null;
+        state.selected = 0;
+        state.scrollTop = 0;
+      }
+      if (!announced && !refresh) {
+        announced = true;
+        const n = securityFixes().length;
+        if (n > 0)
+          flash(`${n} security fix${n === 1 ? "" : "es"} ready · f to update`, "warn", 6000);
+      }
+      if (refresh) {
+        const n = report.counts.affected;
+        flash(
+          n ? `${n} vulnerable package${n === 1 ? "" : "s"}` : "no known vulnerabilities",
+          n ? "warn" : "ok",
+          4000,
+        );
+      }
+    } catch (e) {
+      state.securityError = e instanceof Error ? e.message : String(e);
+    } finally {
+      securityInFlight = false;
+      state.securityChecking = false;
+      if (!state.scanning) stopSpinner();
+      rerender();
+      if (securityQueued !== null && !closing) {
+        const again = securityQueued;
+        securityQueued = null;
+        void doSecurity(again);
+      }
+    }
   };
 
   let scanInFlight = false;
@@ -2290,6 +3065,7 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
       flash(scanSummary(prev, result), "ok", 5000);
       rerender();
       schedulePrewarm();
+      void doSecurity();
     } catch (e) {
       state.scanning = false;
       state.scanMessage = "scan failed";
@@ -2297,44 +3073,128 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
       rerender();
     } finally {
       scanInFlight = false;
-      stopSpinner();
+      if (!state.securityChecking) stopSpinner();
     }
   };
 
-  const runCommands = async (cmds: { cmd: string[] }[]) => {
-    overlay.visible = false;
-    renderer.suspend();
+  let jobTimer: ReturnType<typeof setInterval> | null = null;
+  const stopJobTimer = () => {
+    if (jobTimer) clearInterval(jobTimer);
+    jobTimer = null;
+  };
+
+  const executeJob = async (job: Job, password?: string) => {
+    job.phase = "running";
+    job.startedAt = Date.now();
+    rerender();
     try {
-      let okCount = 0;
-      for (const [i, c] of cmds.entries()) {
-        process.stdout.write(`\n[${i + 1}/${cmds.length}] $ ${c.cmd.join(" ")}\n`);
-        let code: number;
-        try {
-          const proc = Bun.spawn(c.cmd, { stdio: ["inherit", "inherit", "inherit"] });
-          code = await proc.exited;
-        } catch (err) {
-          // e.g. ENOENT: report it and carry on with the rest of the batch.
-          process.stdout.write(`  could not start: ${err instanceof Error ? err.message : err}\n`);
-          code = 127;
-        }
-        process.stdout.write(`  (exit ${code})\n`);
-        if (code === 0) okCount++;
-      }
-      process.stdout.write(
-        `\n${okCount}/${cmds.length} succeeded. Press Enter to return to pkgstate…`,
-      );
-      await new Promise<void>((resolve) => {
-        const onData = () => {
-          process.stdin.off("data", onData);
-          resolve();
-        };
-        process.stdin.once("data", onData);
+      await runSteps(job.steps, job.log, {
+        spawn: spawnCmd,
+        password,
+        shouldStop: () => job.stopRequested,
+        onUpdate: rerender,
       });
     } finally {
-      // Never leave the user's terminal stuck in suspended mode.
-      renderer.resume();
+      job.phase = "done";
+      job.endedAt = Date.now();
+      stopJobTimer();
+      rerender();
     }
-    await doScan(true);
+  };
+
+  const startJob = (cmds: { cmd: string[]; manager: string; count: number }[], title: string) => {
+    const job: Job = {
+      title,
+      phase: "checking",
+      steps: cmds.map((c) => ({ ...c, status: "pending" })),
+      log: new OutputLog(),
+      secret: "",
+      attempts: 0,
+      stopRequested: false,
+    };
+    state.job = job;
+    stopJobTimer();
+    jobTimer = setInterval(() => {
+      spinnerFrame++;
+      if (state.job === job) renderOverlay();
+    }, 200);
+    rerender();
+    void (async () => {
+      const sudo = job.steps.some((s) => usesSudo(s.cmd));
+      if (!sudo || (await sudoReady(spawnCmd))) return executeJob(job);
+      job.phase = "auth";
+      rerender();
+    })();
+  };
+
+  const submitPassword = async (job: Job) => {
+    const password = job.secret;
+    if (!password || job.phase !== "auth") return;
+    job.phase = "checking";
+    job.authError = undefined;
+    rerender();
+    const ok = await sudoUnlock(password, spawnCmd);
+    job.secret = "";
+    if (state.job !== job) return;
+    if (ok) return executeJob(job, password);
+    job.attempts++;
+    if (job.attempts >= 3) {
+      closeJob(false);
+      flash("sudo: 3 incorrect password attempts", "error", 6000);
+      return;
+    }
+    job.phase = "auth";
+    job.authError = "wrong password, try again";
+    rerender();
+  };
+
+  const closeJob = (rescan: boolean) => {
+    stopJobTimer();
+    state.job = undefined;
+    rerender();
+    if (rescan) void doScan(true);
+  };
+
+  const onJobKey = (
+    job: Job,
+    name: string,
+    key: { ctrl: boolean; meta: boolean; sequence: string },
+  ) => {
+    if (job.phase === "auth") {
+      if (name === "escape") return closeJob(false);
+      if (name === "return" || name === "enter") {
+        void submitPassword(job);
+        return;
+      }
+      if (name === "backspace") job.secret = job.secret.slice(0, -1);
+      else if (key.ctrl && name === "u") job.secret = "";
+      else if (
+        !key.ctrl &&
+        !key.meta &&
+        [...key.sequence].length === 1 &&
+        key.sequence >= " " &&
+        key.sequence !== "\x7f"
+      )
+        job.secret += key.sequence;
+      rerender();
+    } else if (job.phase === "running") {
+      if (name === "escape" || name === "s") {
+        job.stopRequested = true;
+        job.killArmedAt = undefined;
+        rerender();
+      } else if (name === "k") {
+        if (killArmed(job)) {
+          job.killArmedAt = undefined;
+          job.steps.find((s) => s.status === "running")?.abort?.abort();
+        } else {
+          job.killArmedAt = Date.now();
+        }
+        rerender();
+      }
+    } else if (job.phase === "done") {
+      if (name === "return" || name === "enter" || name === "escape" || name === "q")
+        closeJob(true);
+    }
   };
 
   const copy = (text: string, what: string) => {
@@ -2361,19 +3221,25 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
     return false;
   };
 
-  /** First row of the next (or current/previous) manager block. */
-  const jumpManager = (dir: 1 | -1) => {
+  /** First row of the next (or current/previous) block: a triage section
+   *  when sections show, else a run of one manager. */
+  const jumpBlock = (dir: 1 | -1) => {
     const hits = visibleHits();
-    const cur = hits[state.selected]?.pkg.manager;
+    const bySection = logicalRows(hits).some((r) => r.kind === "section");
+    const block = (i: number): string | undefined => {
+      const p = hits[i]?.pkg;
+      return p && (bySection ? sectionOf(p) : p.manager);
+    };
+    const cur = block(state.selected);
     if (cur === undefined) return;
     const startOf = (i: number) => {
-      const m = hits[i]?.pkg.manager;
-      while (i > 0 && hits[i - 1]?.pkg.manager === m) i--;
+      const b = block(i);
+      while (i > 0 && block(i - 1) === b) i--;
       return i;
     };
     if (dir === 1) {
       let i = state.selected;
-      while (i < hits.length && hits[i]?.pkg.manager === cur) i++;
+      while (i < hits.length && block(i) === cur) i++;
       if (i < hits.length) state.selected = i;
     } else {
       const start = startOf(state.selected);
@@ -2389,9 +3255,14 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
     clampScroll(rows);
   };
 
-  const confirmUpdate = (candidates: Package[], emptyMessage: string) => {
+  const confirmUpdate = (
+    candidates: Package[],
+    emptyMessage: string,
+    notes: string[] = [],
+    title?: string,
+  ) => {
     if (candidates.length === 0) {
-      flash(emptyMessage, "warn");
+      flash(notes[0] ?? emptyMessage, "warn");
       return;
     }
     const batched = batchUpdates(candidates);
@@ -2400,8 +3271,28 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
       return;
     }
     const packages = batched.reduce((n, b) => n + b.packages.length, 0);
+    const warnings: string[] = [];
+    for (const p of candidates) {
+      const sec = secOf(p);
+      if (!sec) continue;
+      if (sec.verdict === "hold" || sec.latestAdvisories.length > 0 || sec.verdict === "malware")
+        warnings.push(`${p.name}: ${sec.reason}`);
+      // Managers install the latest; say so when the safe target is older.
+      // (dnf's newer builds of a fixed release carry the fix.)
+      else if (
+        sec.verdict === "fix" &&
+        sec.target &&
+        p.latest &&
+        p.manager !== "dnf" &&
+        cmpVersions(p.latest, sec.target) > 0
+      )
+        warnings.push(`${p.name}: installs ${p.latest}; ${sec.reason}`);
+    }
     state.confirm = {
-      title: packages === 1 ? `update ${candidates[0]?.name}` : `update ${packages} packages`,
+      warnings,
+      notes,
+      title:
+        title ?? (packages === 1 ? `update ${candidates[0]?.name}` : `update ${packages} packages`),
       packages,
       cmds: batched.map((b) => ({
         cmd: b.cmd,
@@ -2442,6 +3333,7 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
   // ── Mouse ─────────────────────────────────────────────────────────────────
 
   tableBox.onMouseScroll = (event) => {
+    touched = true;
     const dir = event.scroll?.direction;
     const delta = event.scroll?.delta ?? 1;
     if (dir === "down") moveSelected(delta);
@@ -2451,6 +3343,7 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
   };
   tableBox.onMouseDown = (event) => {
     if (overlayOpen()) return;
+    touched = true;
     const x = event.x - tableBox.x;
     if (event.y === tableTop.y) {
       const tab = tabRanges.find((r) => x >= r.x0 && x < r.x1);
@@ -2478,6 +3371,12 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
     rerender();
   };
 
+  secBar.onMouseDown = () => {
+    if (overlayOpen()) return;
+    setView(state.view === "security" ? "all" : "security");
+    rerender();
+  };
+
   const sortBy = (next: SortKey) => {
     // Picking the active column again reverses it, like a header click.
     if (state.sortKey === next) state.sortDir = state.sortDir === "asc" ? "desc" : "asc";
@@ -2489,12 +3388,17 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
   // ── Keys ──────────────────────────────────────────────────────────────────
 
   renderer.keyInput.on("keypress", (key) => {
+    touched = true;
     // Shifted letters arrive as the lowercase name with `shift` set.
     const name =
       key.shift && key.name.length === 1 && /[a-z]/.test(key.name)
         ? key.name.toUpperCase()
         : key.name;
 
+    if (state.job) {
+      onJobKey(state.job, name, key);
+      return;
+    }
     if (state.showHelp) {
       if (name === "escape" || name === "q" || key.sequence === "?") {
         state.showHelp = false;
@@ -2511,12 +3415,9 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
     }
     if (state.confirm) {
       if (name === "y") {
-        const cmds = state.confirm.cmds;
+        const { cmds, title } = state.confirm;
         state.confirm = undefined;
-        rerender();
-        runCommands(cmds).catch((e) =>
-          flash(`update failed: ${e instanceof Error ? e.message : e}`, "error", 6000),
-        );
+        startJob(cmds, title);
       } else if (name === "n" || name === "escape" || name === "q") {
         state.confirm = undefined;
         rerender();
@@ -2624,18 +3525,61 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
       case "o":
         setView(state.view === "outdated" ? "all" : "outdated");
         break;
+      case "v":
+        setView(state.view === "security" ? "all" : "security");
+        if (state.view === "security" && !state.security)
+          flash("security check still running", "info");
+        break;
+      case "V":
+        if (state.securityChecking) {
+          flash("security check already running", "warn");
+          return;
+        }
+        void doSecurity(true);
+        return;
       case "]":
-        jumpManager(1);
+        jumpBlock(1);
         break;
       case "[":
-        jumpManager(-1);
+        jumpBlock(-1);
         break;
       case "n":
-      case "N":
-        if (!jumpTo(name === "n" ? 1 : -1, (p) => p.status === "outdated")) {
-          flash("no other outdated package in view", "warn");
-        }
+      case "N": {
+        const act = (p: Package) => p.status === "outdated" || needsAttention(secOf(p));
+        if (!jumpTo(name === "n" ? 1 : -1, act)) flash("nothing else to act on in view", "warn");
         break;
+      }
+      case "right":
+      case "l":
+      case "left":
+      case "h": {
+        const step = name === "right" || name === "l" ? 1 : VIEWS.length - 1;
+        setView(VIEWS[(VIEWS.indexOf(state.view) + step) % VIEWS.length]!);
+        break;
+      }
+      case "return":
+      case "enter":
+        state.showDetail = !state.showDetail;
+        persist();
+        break;
+      case "f": {
+        if (!state.security) {
+          flash(
+            state.securityChecking ? "security check still running" : "not checked yet",
+            "warn",
+          );
+          return;
+        }
+        const fixes = securityFixes();
+        const n = fixes.length;
+        confirmUpdate(
+          fixes,
+          "no security fixes to install",
+          [],
+          `install ${n} security fix${n === 1 ? "" : "es"}`,
+        );
+        return;
+      }
       case "space": {
         const p = selectedPkg();
         if (!p) return;
@@ -2821,11 +3765,19 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
             "no updatable marked rows",
           );
         } else {
+          // Bulk updates leave held packages alone; mark one to override.
+          const outdated = visibleHits()
+            .map((h) => h.pkg)
+            .filter((p) => p.status === "outdated" && p.updateCmd);
+          const held = outdated.filter((p) => secOf(p)?.verdict === "hold");
           confirmUpdate(
-            visibleHits()
-              .map((h) => h.pkg)
-              .filter((p) => p.status === "outdated" && p.updateCmd),
+            outdated.filter((p) => secOf(p)?.verdict !== "hold"),
             "nothing in view to update",
+            held.length
+              ? [
+                  `Skipping ${held.length} held package${held.length === 1 ? "" : "s"} (mark to update anyway).`,
+                ]
+              : [],
           );
         }
         return;
@@ -2842,6 +3794,8 @@ export async function runTui(opts: { refresh?: boolean } = {}, deps: TuiDeps = {
 
   if (!injected) renderer.start();
   rerender();
+  // The snapshot gets a verdict right away; the scan re-checks what changed.
+  void doSecurity();
   void doScan(opts.refresh ?? false);
   return { renderer, state, stop: stopTimers };
 }
